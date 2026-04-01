@@ -1,0 +1,132 @@
+---
+title: "Project 2 : "Implementing regression-based and classification modeling techniques"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F, message = F)
+options(scientific=T, digits = 3) 
+library(ggplot2)
+library(viridis) 
+library(dplyr)
+library(scales)
+library(tidyverse)
+```
+
+
+# Introduction
+
+This project studies a credit risk data containing more than 30,000 loan observations. The dataset includes detailed information on borrower demographics (such as age and home ownership), financial capacity (income and employment length), credit history (credit history length and prior default), and loan characteristics (loan amount, loan intent, and interest rate). Building on exploratory findings from Project 1, this project focuses on applying statistical modeling techniques to better understand and quantify the relationships between borrower characteristics and key lending outcomes.
+
+The primary objective of this project is to apply regression-based and classification modeling approaches to answer three SMART research questions that address different aspects of credit risk and lending behavior. Together, these three questions provide a comprehensive view of lending dynamics by addressing pricing (interest rate), risk (default probability), and borrowing behavior (loan amount). The analysis combines exploratory insights with formal statistical modeling to evaluate both explanatory relationships and predictive performance, while also assessing the strengths and limitations of the models used.
+
+# Background and Summary of Project 1
+
+In Project 1, our team conducted an exploratory data analysis of a consumer credit risk data obtained from Kaggle, which is the same dataset used in this project.
+The purpose of the first project was to identify important structural patterns in borrower behavior, default risk, and revenue generation.
+
+The exploratory analysis also showed that many numerical variables, especially person_income and loan_amnt, were strongly right-skewed, indicating the presence of a large number of moderate-value loans and a relatively small number of high-value observations. 
+
+Project 1 addressed several business-oriented questions related to revenue generation, default behavior, and product strategy. One major finding was that first-year income generation was driven more by loan volume than by per-loan efficiency. Younger borrowers and middle-income groups generated the largest total first-year income, while higher-income and longer-employment borrowers tended to produce greater income per loan but contributed less total portfolio revenue because they were less represented in the dataset. In particular, the 60k--100k income group generated the highest total first-year income, while the 200k+ income group showed the highest income efficiency per loan. A one-way ANOVA further confirmed that mean first-year income differed significantly across income groups.
+
+The first project also revealed strong and statistically significant variation in default risk across borrower categories. Among all single predictors, loan grade was the strongest separator of default behavior: default rates increased sharply from 9.6% for Grade A to 98.3% for Grade G. Income level showed a strong inverse relationship with default risk, with borrowers earning less than 30k exhibiting much higher default rates than middle- and higher-income borrowers. Home ownership, employment length, loan intent, and prior default history also showed meaningful differences in default behavior, and Chi-square tests confirmed that these relationships were statistically significant. 
+
+Additional findings from Project 1 showed that borrowers who defaulted tended to carry a substantially higher loan-to-income burden than non-defaulted borrowers. Loan purpose also mattered: some intents, such as Personal and Debt Consolidation, were associated with relatively high default rates, while Venture and Education loans were more favorable in terms of both revenue generation and repayment performance. 
+
+These EDA findings are instrumental for our team. Since the first project identified strong relationships between borrower characteristics and outcomes such as interest rate, default status, and loan amount, the next natural step is to use formal statistical models to quantify these relationships, evaluate their explanatory strength, and assess how well they support inference and prediction.
+
+
+# Data and Variables
+
+## Data Source
+
+This project uses the *credit_risk_dataset.csv* obtained from Kaggle. It includes 32,581 observations and 12 variables describing borrower attributes and loan outcomes.
+
+```{r}
+credit_risk_dataset_1 = read.csv("credit_risk_dataset.csv")
+nrow(credit_risk_dataset_1)
+ncol(credit_risk_dataset_1)
+```
+
+## Variable definitions  
+
+Variable | Definition  
+:-|:--  
+person_age | Age of the borrower  
+person_income | Annual income of the borrower  
+person_home_ownership | Home ownership status  
+person_emp_length | Length of employment (months)  
+loan_intent | Purpose of the loan  
+loan_grade | Credit grade assigned to the loan  
+loan_amnt | Loan amount  
+loan_int_rate | Annual interest rate (%)  
+loan_status | Loan outcome (1 = default, 0 = non-default)  
+loan_percent_income | Loan amount as a percentage of income  
+cb_person_default_on_file | Prior default history (Y/N)  
+cb_person_cred_hist_length | Length of credit history (years)
+
+
+
+# Data Cleaning & Feature Engineering
+
+## Data type corrections
+
+```{r}
+summary(credit_risk_dataset_1)
+```
+
+The summary output indicates that several categorical variables are incorrectly treated as numeric. These variables are converted to factors to ensure proper handling in statistical modeling:
+ - person_home_ownership
+ - loan_intent
+ - loan_grade
+ - cb_person_default_on_file
+ - loan_status
+
+``` {r}
+credit_risk_dataset_1$person_home_ownership = as.factor(credit_risk_dataset_1$person_home_ownership)
+credit_risk_dataset_1$loan_intent = as.factor(credit_risk_dataset_1$loan_intent)
+credit_risk_dataset_1$loan_grade = as.factor(credit_risk_dataset_1$loan_grade)
+credit_risk_dataset_1$loan_status = as.factor(credit_risk_dataset_1$loan_status)
+credit_risk_dataset_1$cb_person_default_on_file = as.factor(credit_risk_dataset_1$cb_person_default_on_file)
+summary(credit_risk_dataset_1)
+```
+
+## Handling missing values
+
+Missing values exist in key variables, particularly person_emp_length and loan_int_rate. Since loan_int_rate is a primary variable used in modeling, observations with missing values in these fields cannot be reliably included in the study. Taking into account the relatively large size of the dataset (over 30,000 observations), a complete-case analysis approach is adopted, where rows containing missing values are removed. We think, this approach is appropriate in this context because it simplifies the analysis and is unlikely to significantly reduce statistical power.
+
+```{r}
+colSums(is.na(credit_risk_dataset_1))
+credit_risk_dataset_clean = na.omit(credit_risk_dataset_1)
+colSums(is.na(credit_risk_dataset_clean))
+nrow(credit_risk_dataset_clean)
+```
+
+The dataset is cleaned by removing observations with missing values and new dataframe - "credit_risk_dataset_clean" is created.
+
+Now we have 28,638 clean rows.
+
+The cleaned dataset is used for all subsequent exploratory analysis and modeling steps in this project.
+
+
+
+# SMART QUESTION 1:Do borrower characteristics affect interest rate? 
+
+## Modeling Strategy
+
+This question is primarily an inference problem, as the goal is to understand how borrower characteristics are associated with loan interest rate and whether these relationships are statistically significant.
+
+To address this question, multiple linear regression is used with loan_int_rate as the response variable. Two models are considered. The first model includes only borrower-related characteristics, such as demographic, financial, and credit history variables. This allows us to assess the direct relationship between borrower attributes and interest rate.
+
+A second model extends the first by including loan_grade. Since loan grade is assigned by the lender and reflects an overall assessment of borrower risk, it may capture information already embedded in borrower characteristics. Comparing these two models helps distinguish between the direct effects of borrower variables and the influence of lender-based risk classification.
