@@ -1,0 +1,1462 @@
+---
+title: "Project 1 : Exploratory Data Analysis (EDA)"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F, message = F)
+options(scientific=T, digits = 3) 
+library(ggplot2)
+library(viridis) 
+library(dplyr)
+library(scales)
+library(tidyverse)
+```
+
+# Intro
+
+The EDA analyzes a bank credit dataset to evaluate borrower risks and identify value-generating lending segments. Using EDA, we assess default behavior across demographic and financial categories. The analysis addresses four key business questions related to income generation, risk concentration, default prediction, and product design. The objective is to support data-driven decision-making in credit portfolio management.
+
+The smart questions formulated: 
+1.Which (age, income, home ownership, person_emp_length) categories generated more income for a bank in the first year? 
+2.Which categories and categories combination are more inclined to default?
+3.Given the preliminary data, can we predict the default probability of particular customer? 
+4.What new loan product could generate more value for a bank? 
+
+
+# Data and Variables
+
+## Data source
+
+This project uses the credit_risk_dataset.csv downloaded from kaggle.com. The dataset contains borrower demographic, financial, and credit-related characteristics used to assess loan risk and profitability. 
+The dataset includes 32581 observations and 12 variables.
+
+```{r}
+credit_risk_dataset_1 = read.csv("credit_risk_dataset.csv")
+nrow(credit_risk_dataset_1)
+ncol(credit_risk_dataset_1)
+```
+
+## Variable definitions  
+
+Variable |  Definition  
+  :-:    |  :-- 
+person_age | Age of the borrower
+person_income | Annual income of the borrower
+person_home_ownership | Borrower's howe ownership type
+person_emp_length | Durability of total employment in months
+loan_intent | Loan intent
+loan_grade | Loan grade
+loan_amnt | Loan amount
+loan_int_rate | Loan interest rate (annual)
+loan_status | Current loan status (1 - default, 0 - non default)
+loan_percent_income | The share of the loan in borrower's income
+cb_person_default_on_file | Default occurrence before the loan
+cb_person_cred_hist_length | Length of credit history before the loan
+
+
+# Data Cleaning & Feature Engineering
+
+## Data type corrections
+
+```{r}
+summary(credit_risk_dataset_1)
+```
+
+The summary function demonstrates incorrect statistics for the columns:
+ - person_home_ownership
+ - loan_intent
+ - loan_grade
+ - cb_personal_default_on_file
+ - loan_status
+
+Therefore let's convert these variables into factors:
+
+``` {r}
+credit_risk_dataset_1$person_home_ownership = as.factor(credit_risk_dataset_1$person_home_ownership)
+credit_risk_dataset_1$loan_intent = as.factor(credit_risk_dataset_1$loan_intent)
+credit_risk_dataset_1$loan_grade = as.factor(credit_risk_dataset_1$loan_grade)
+credit_risk_dataset_1$loan_status = as.factor(credit_risk_dataset_1$loan_status)
+credit_risk_dataset_1$cb_person_default_on_file = as.factor(credit_risk_dataset_1$cb_person_default_on_file)
+summary(credit_risk_dataset_1)
+```
+
+## Handling missing values
+
+To ensure qualitative summary statistics and visualization, it is good and standard approach to remove rows with missing values:
+According to the summary we have 895 'NA' values in person_emp_length and 3116 values in and loan_int_rate columns.
+
+This is also evident with: 
+```{r}
+colSums(is.na(credit_risk_dataset_1))
+```
+
+Now we delete the rows with missing values and create new dataframe - "credit_risk_dataset_clean":
+
+```{r}
+credit_risk_dataset_clean = na.omit(credit_risk_dataset_1)
+colSums(is.na(credit_risk_dataset_clean))
+nrow(credit_risk_dataset_clean)
+```
+
+Now we have 28,638 clean rows.
+
+
+# SMART QUESTION 1:
+
+## Which (age, income, home ownership, person_emp_length) categories generated more income for a bank in the first year? 
+
+## Introduction
+
+To examine the distributional properties of the dataset, we will construct histograms for all numerical variables.
+
+```{r}
+# Select numeric variables
+numeric_data <- credit_risk_dataset_clean %>%
+  select(person_age,
+         person_income,
+         person_emp_length,
+         loan_amnt,
+         loan_int_rate,
+         loan_percent_income,
+         cb_person_cred_hist_length)
+
+# Convert to long format
+numeric_long <- numeric_data %>%
+  pivot_longer(cols = everything(),
+               names_to = "variable",
+               values_to = "value")
+
+# Plot
+ggplot(numeric_long, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distribution of Numeric Variables in Credit Risk Dataset",
+       x = "Value",
+       y = "Frequency")
+```
+
+Several financial variables, including borrower income and loan amount, display right-skewed distributions, indicating that most observations are concentrated at lower values with relatively few high-value observations. Such patterns are typical for financial datasets where extreme values occur infrequently but may significantly affect overall variability.
+
+## Step 1
+
+- To analyze this question, we have to extract the rows where loan_status == '0', that is non-default loans.
+- Further we assume that income for the first year will be defined with formula : loan_amnt*loan_int_rate/100
+- We create new dataframe "credit_risk_dataset_clean_1" by adding new column named "first_year_income" and populate the column with formula : loan_amnt*loan_int_rate/100
+
+
+``` {r}
+credit_risk_dataset_clean_1 <- subset(credit_risk_dataset_clean, loan_status == "0")
+
+credit_risk_dataset_clean_1$first_year_income <- (credit_risk_dataset_clean_1$loan_amnt) * (credit_risk_dataset_clean_1$loan_int_rate) / 100
+
+str(credit_risk_dataset_clean_1)
+```
+
+## Step 2
+
+For the purpose of comparing generated income within each groups we create categories for:
+- Age ("20-30","30-40","40-50","50-60","60+")
+- Income ("<30k","30k-60k","60k-100k","100k-200k","200k+)
+- Employment length ("<30k","30k-60k","60k-100k","100k-200k","200k+")
+No need to create categories for home_ownership and loan_intenet as they are already factors
+
+
+``` {r}
+credit_risk_dataset_clean_1$age_group <- cut(credit_risk_dataset_clean_1$person_age,
+      breaks = c(20, 30, 40, 50, 60, 100),
+      labels = c("20-30","30-40","40-50","50-60","60+"),
+      right = FALSE)
+
+credit_risk_dataset_clean_1$income_group <- cut(credit_risk_dataset_clean_1$person_income,
+      breaks = c(0, 30000, 60000, 100000, 200000, 10000000),
+      labels = c("<30k","30k-60k","60k-100k","100k-200k","200k+"),
+      right = FALSE)
+
+
+credit_risk_dataset_clean_1$emp_group <-
+  cut(credit_risk_dataset_clean_1$person_emp_length,
+      breaks = c(0, 2, 5, 10, 20, 100),
+      labels = c("0-2","2-5","5-10","10-20","20+"),
+      right = FALSE)
+
+str(credit_risk_dataset_clean_1)
+```
+
+## Step 3
+
+We now compare age_group, income_group, employment_length, home_ownership, loan_intent with first_year_income and with number of loans allocated.
+- Creating table for each group to compare loan volume
+- Building bar chart plots for each group, as it is more demonstrative in our case
+We include the number of loans and per loan income as it is required to estimate volume and scale impact 
+
+a) age_group
+
+``` {r}
+age_income_summary <- aggregate(first_year_income ~ age_group,data = credit_risk_dataset_clean_1, sum)
+age_count <- aggregate(first_year_income ~ age_group, data = credit_risk_dataset_clean_1, length)
+colnames(age_count)[2] <- "loan_count"
+age_results <- merge(age_income_summary, age_count, by="age_group")
+age_results$income_per_loan <- age_results$first_year_income / age_results$loan_count
+age_results
+
+## Since we are dealing with categorical comparisons, the correct plot would be the Bar plot 
+ggplot(age_results, aes(x = age_group, y = first_year_income)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = paste0("PL: ",comma(round(income_per_loan, 0)))),
+            color = "red",
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Total First-Year Income by Age Group", subtitle = "PL = Average First-Year Income Per Loan",
+       x = "Age Group",
+       y = "Total First-Year Income") +
+  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The 20–30 age segment generates the highest total first-year income (15.7M), substantially exceeding all other age groups. However, this dominance is primarily driven by portfolio volume rather than high per-loan profitability. The concentration of revenue among younger borrowers demonstrates a high-volume lending effect rather than increased income efficiency per loan.
+
+
+b) income_group
+
+``` {r}
+# Total income per income group
+income_income_summary <- aggregate(first_year_income ~ income_group, data = credit_risk_dataset_clean_1,sum)
+# Loan count per income group
+income_count <- aggregate(first_year_income ~ income_group,data = credit_risk_dataset_clean_1, length)
+colnames(income_count)[2] <- "loan_count"
+# Merge 
+income_results <- merge(income_income_summary, income_count, by = "income_group")
+# Income per loan
+income_results$income_per_loan <- income_results$first_year_income / income_results$loan_count
+income_results
+
+ggplot(income_results,
+       aes(x = income_group,
+           y = first_year_income)) +
+  
+  geom_bar(stat = "identity", fill = "darkcyan") +
+  
+  geom_text(aes(label = paste0("PL: ",
+                               comma(round(income_per_loan, 0)))),
+            color = "red",
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+  
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.12))) +
+    labs(title = "Total First-Year Income by Income Group",
+       subtitle = "PL = Average First-Year Income Per Loan",
+       x = "Income Group",
+       y = "Total First-Year Income") +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Borrowers earning between 60k–100k generate the highest total first-year income (8.85M), followed by the 30k–60k segment (7.04M), indicating that middle-income borrowers form the core revenue base of the portfolio. Per-loan income increases significantly with borrower income, rising from 477 in the <30k segment to 1,994 in the 200k+ segment. This means that although revenue is volume-driven within middle-income class, high-income borrowers exhibit significantly greater income efficiency per loan but contribute less to overall revenue due to limited number of such credits.
+
+c) emp_group
+
+``` {r}
+# Employment length summary table
+emp_income_summary <- aggregate(first_year_income ~ emp_group, data = credit_risk_dataset_clean_1, sum)
+emp_count <- aggregate(first_year_income ~ emp_group, data = credit_risk_dataset_clean_1, length)
+colnames(emp_count)[2] <- "loan_count"
+emp_results <- merge(emp_income_summary, emp_count, by = "emp_group")
+emp_results$income_per_loan <- emp_results$first_year_income / emp_results$loan_count
+emp_results
+
+# Employment length bar chart (Total income + PL label)
+ggplot(emp_results, aes(x = emp_group, y = first_year_income)) +
+  geom_bar(stat = "identity", fill = "purple") +
+  geom_text(aes(label = paste0("PL: ", comma(round(income_per_loan, 0)))),
+            color = "red", vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.12))) +
+  labs(title = "Total First-Year Income by Employment Length Group", subtitle = "PL = Average First-Year Income Per Loan",
+       x = "Employment Length Group",
+       y = "Total First-Year Income") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Customers with 5–10 years of employment record bring the highest total first-year income (8.23M), followed by the 2–5 year group (6.85M), reflecting strong portfolio concentration. However, per-loan income rises steadily with employment stability, reaching 1,113 and 1,137 for the 10–20 and 20+ year segments respectively. Although long working borrowers contribute limited aggregate revenue due to small portfolio representation, they demonstrate superior income efficiency per loan. 
+
+
+d) person_home_ownership
+
+``` {r}
+# Home ownership summary table
+home_income_summary <- aggregate(first_year_income ~ person_home_ownership, data = credit_risk_dataset_clean_1, sum)
+home_count <- aggregate(first_year_income ~ person_home_ownership, data = credit_risk_dataset_clean_1, length)
+colnames(home_count)[2] <- "loan_count"
+home_results <- merge(home_income_summary, home_count, by = "person_home_ownership")
+home_results$income_per_loan <- home_results$first_year_income / home_results$loan_count
+home_results
+
+# Home ownership bar chart (Total income + PL label)
+ggplot(home_results, aes(x = person_home_ownership, y = first_year_income)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_text(aes(label = paste0("PL: ", comma(round(income_per_loan, 0)))),
+            color = "red", vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.12))) +
+  labs(title = "Total First-Year Income by Home Ownership",subtitle = "PL = Average First-Year Income Per Loan",
+       x = "Home Ownership",
+       y = "Total First-Year Income") +
+  theme_minimal()
+```
+
+
+Mortgage holders generate the highest aggregate first-year income (11.33M), narrowly exceeding renters (8.76M), reflecting substantial portfolio concentration within these housing segments. However, per-loan income differs considerably across groups: mortgage borrowers exhibit strong income efficiency (1,098 per loan), while renters generate the lowest per-loan income (876) despite comparable loan volume. Mortgage borrowers combine both scale and income efficiency, making them the structurally strongest contributors to portfolio revenue.
+
+  
+e) loan_intent
+
+``` {r}
+# Loan intent summary table
+intent_income_summary <- aggregate(first_year_income ~ loan_intent, data = credit_risk_dataset_clean_1, sum)
+intent_count <- aggregate(first_year_income ~ loan_intent,data = credit_risk_dataset_clean_1, length)
+colnames(intent_count)[2] <- "loan_count"
+intent_results <- merge(intent_income_summary, intent_count, by = "loan_intent")
+intent_results$income_per_loan <- intent_results$first_year_income / intent_results$loan_count
+intent_results
+
+# Loan intent bar chart (Total income + PL label)
+ggplot(intent_results, aes(x = loan_intent, y = first_year_income)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  geom_text(aes(label = paste0("PL: ", comma(round(income_per_loan, 0)))),
+            color = "red", vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "Total First-Year Income by Loan Intent", subtitle = "PL = Average First-Year Income Per Loan",
+       x = "Loan Intent",
+       y = "Total First-Year Income") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Education loans generate the highest aggregate first-year income (4.74M), followed by Venture (4.32M) and Personal loans (4.01M), reflecting substantial portfolio volume within these segments. Home Improvement loans exhibit the highest income efficiency (1,166 per loan) despite generating lower aggregate revenue due to smaller loan volume. While total revenue is broadly distributed across several loan purposes, profitability efficiency differs by intent, with Home Improvement loans offering the strongest per-loan income performance.
+
+## Step 4
+We build "first year income" histogram to observe distribution, skewness, heavy tails and concentration of the continuous variable. 
+
+```{r}
+ggplot(credit_risk_dataset_clean_1, aes(x = first_year_income)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Distribution of First-Year Income (Proxy)",
+       x = "First-Year Income",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+
+The distribution of first-year income is strongly right-skewed, with the majority of loans generating relatively modest income levels (below 1,500) and a long upper tail extending toward 4,000+. This indicates that portfolio revenue is largely driven by high loan volume in moderate-income ranges, while a smaller number of high-balance or high-rate loans generate disproportionately large income values.
+
+Boxplot of "first year income" variable.
+
+```{r}
+ggplot(credit_risk_dataset_clean_1, aes(y = first_year_income)) +
+  geom_boxplot(fill = "orange") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Boxplot of First-Year Income (Proxy)",
+       y = "First-Year Income") +
+  theme_minimal()
+```
+
+
+The boxplot confirms significant variability in first-year income and highlights outliers beyond the upper whisker. The median is much smaller than the maximum values, reinforcing the presence of a long right tail. The strong concentration of observations at lower values and the presence of many extreme observations in the upper range confirm a right-skewed distribution, which is consistent with the pattern observed in the histogram.
+
+## Step 5 
+
+ANOVA Testing
+Dependent variable - first_year_income (quantitative)
+Independent variable - income_group (factor, 3+ categories)
+We did a one-way ANOVA to determine whether mean income differs significantly across groups, beyond random variation.
+
+``` {r}
+anova_income <- aov(first_year_income ~ income_group,
+                    data = credit_risk_dataset_clean_1)
+summary(anova_income)
+```
+
+
+ANOVA test was performed to assess whether mean first-year income differs across borrower income groups. The test shows a highly significant result (F(4, 22430) = 1033, p < 2 × 10⁻¹⁶), indicating that the variation in mean first-year income across income categories is far greater than would be expected from within-group variability alone. The significant F-statistic suggests strong between-group differentiation, confirming that borrower income level is a major structural determinant of first-year income generation. We conclude that differences observed are statistically strong rather than the results of random sampling variation.
+
+
+## Summary:
+
+**First-year income is primarily driven by loan portfolio volume rather than per-loan efficiency. The 20–30 age group generates the highest total income (15.7M), but its per-loan income (976) is comparable to other groups, indicating a high-volume effect. Middle-income borrowers (60k–100k: 8.85M; 30k–60k: 7.04M) form the core revenue base, while high-income borrowers (200k+) show the highest per-loan income (1,994) but limited aggregate contribution due to smaller portfolio size. ANOVA confirms statistically significant differences in mean income across income groups (F(4,22430)=1033, p<2e-16), validating structural revenue variation. Overall, income generation is concentrated in high-volume middle segments, with profitability efficiency increasing with borrower income and employment stability.**
+
+
+# SMART QUESTION 2:
+
+## Which categories and categories combination are more inclined to default ? 
+
+##  Introduction
+
+Default rate per category is defined as: Default Rate = Number of Defaults / Total Loans in Category
+This gives:
+- Relative risk
+- Not affected by group size
+- Comparable across categories
+
+1.loan_grade
+
+```{r}
+grade_default <- credit_risk_dataset_clean %>%
+  group_by(loan_grade) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"), default_rate = mean(loan_status == "1"),.groups = "drop" ) %>%
+  arrange(loan_grade)
+
+grade_default
+```
+
+```{r}
+ggplot(grade_default,
+       aes(x = loan_grade,
+           y = default_rate)) +
+    geom_col(fill = "darkred") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+  
+  scale_y_continuous(labels = percent, expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Loan Grade",
+       x = "Loan Grade",
+       y = "Default Rate") +
+    theme_minimal()
+```
+
+Loan grade exhibits the strongest structural variance in default probability within the dataset. Default rates increase sharply and monotonically from Grade A (9.6%) to Grade G (98.3%). The total spread between the lowest and highest categories is approximately 88.7 percentage points, confirming that loan grade is an exceptionally powerful categorical discriminator of default risk. 
+
+
+Recreating groups for Smart Question 2
+
+```{R}
+credit_risk_dataset_clean$age_group <- cut(
+  credit_risk_dataset_clean$person_age,
+  breaks = c(20, 30, 40, 50, 60, 100),
+  labels = c("20-30","30-40","40-50","50-60","60+"),
+  right = FALSE
+)
+
+credit_risk_dataset_clean$income_group <- cut(
+  credit_risk_dataset_clean$person_income,
+  breaks = c(0, 30000, 60000, 100000, 200000, 10000000),
+  labels = c("<30k","30k-60k","60k-100k","100k-200k","200k+"),
+  right = FALSE
+)
+
+credit_risk_dataset_clean$emp_group <- cut(
+  credit_risk_dataset_clean$person_emp_length,
+  breaks = c(0, 2, 5, 10, 20, 100),
+  labels = c("0-2","2-5","5-10","10-20","20+"),
+  right = FALSE
+)
+```
+
+
+2.Income group
+
+```{r}
+income_default <- credit_risk_dataset_clean %>%
+  group_by(income_group) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  ) %>%
+  arrange(income_group)
+income_default
+```
+
+```{r}
+ggplot(income_default, aes(x = income_group, y = default_rate)) +
+    geom_col(fill = "darkblue") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = percent,
+                     expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Income Group",
+       x = "Income Group",
+       y = "Default Rate") +
+  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Income level demonstrates a strong inverse relationship with default probability. Borrowers earning below 30k exhibit the highest default rate at 46.5%, while those in the 100k–200k segment show a much lower default rate of 8.97%. The total spread between the lowest and highest income categories is approximately 37.5 percentage points, indicating strong structural separation. The slight increase in default rate for the 200k+ group (10.2%) relative to the 100k–200k category is likely due to smaller sample size (492 loans) rather than a reversal of the overall pattern.
+
+
+3.Person_home_ownership
+
+```{r}
+home_default <- credit_risk_dataset_clean %>%
+  group_by(person_home_ownership) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+home_default
+```
+
+```{r}
+ggplot(home_default, aes(x = person_home_ownership, y = default_rate)) +
+    geom_col(fill = "darkorange") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = percent,
+                     expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Home Ownership",
+       x = "Home Ownership",
+       y = "Default Rate") +
+    theme_minimal()
+```
+
+
+Home ownership status shows meaningful contrast in default rates. Borrowers who rent exhibit the highest default rate at 31.2%. In contrast, borrowers who fully own their homes display the lowest default rate at 6.7%, while mortgage holders show a moderate default rate of 12.6%.The spread between the lowest-risk group (OWN, 6.7%) and the highest-risk group (RENT, 31.2%) equals approximately 24.5 percentage points, indicating substantial structural variance. This pattern suggests that housing stability and asset ownership strongly improve repayment performance.
+
+
+4.Employment_group
+
+```{r}
+emp_default <- credit_risk_dataset_clean %>%
+  group_by(emp_group) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+emp_default
+```
+
+```{r}
+ggplot(emp_default, aes(x = emp_group, y = default_rate)) +
+    geom_col(fill = "purple") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = percent,
+                     expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Employment Length",
+       x = "Employment Length Group",
+       y = "Default Rate") +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Employment demonstrates generally declining pattern in default probability as work experience increases. Borrowers with 0–2 years of employment show a default rate of 28.1%, which decreases progressively to 15.8% for those employed 10–20 years. This represents a separation of approximately 12.3 percentage points between early-career and mid-to-late-career borrowers. Surprisingly, 20+ category displays a higher default rate (26.1%).However, this group contains only 134 loans, making the estimate less statistically stable and likely influenced by small-sample variability. Overall, employment stability appears to reduce credit risk. 
+
+
+5.Loan_intent
+
+```{r}
+intent_default <- credit_risk_dataset_clean %>%
+  group_by(loan_intent) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+
+intent_default
+```
+
+
+```{r}
+ggplot(intent_default,
+       aes(x = loan_intent,
+           y = default_rate)) +
+    geom_col(fill = "darkgreen") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = percent,
+                     expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Loan Intent",
+       x = "Loan Intent",
+       y = "Default Rate") +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Default probability varies across loan purposes, though the separation is less evident than for loan grade or income group. Debt consolidation loans display the highest default rate at 28.4%, followed by medical (26.8%) and home improvement (25.7%) loans. In contrast, venture loans display the lowest default rate at 14.6%, while education loans show a relatively moderate default rate of 17.0%. The spread between the highest-risk category (debt consolidation, 28.4%) and the lowest-risk category (venture, 14.6%) equals approximately 13.8 percentage points, which is moderate structural separation. The higher default rates observed in debt consolidation and medical loans may reflect borrowers already experiencing financial distress, whereas venture and education loans may be associated with future income expectations or investment-oriented behavior.
+
+6.Prior default history
+
+```{r}
+prior_default <- credit_risk_dataset_clean %>%
+  group_by(cb_person_default_on_file) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+prior_default
+```
+
+```{r}
+ggplot(prior_default,
+       aes(x = cb_person_default_on_file, y = default_rate)) +
+    geom_col(fill = "darkviolet") +
+    geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5,
+            size = 4.5,
+            fontface = "bold") +
+    scale_y_continuous(labels = percent,
+                     expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Default Rate by Prior Default History",
+       x = "Prior Default on File",
+       y = "Default Rate") +
+    theme_minimal()
+```
+
+
+Borrowers with a prior default on file exhibit a default rate of 37.8%, compared to 18.2% among those without previous defaults. This represents a separation of approximately 19.6 percentage points - significant structural differentiation. The near doubling of default probability for borrowers with prior credit default confirms that historical repayment behavior is a powerful predictor of future default risk. 
+
+## Chi-square testing
+
+So far, we learned differences in default rates. Now we must test : Are the differences statistically significant or could they be due to random sampling variation?
+Chi-square test is appropriate because both variables (loan_status/each category) are categorical.
+
+Now for every variable we created a contingency table, ran a chi-square test and checked the p-value.
+
+1. Loan_grade
+
+```{r}
+# Contingency table
+grade_table <- table(credit_risk_dataset_clean$loan_grade, credit_risk_dataset_clean$loan_status)
+grade_table
+
+# Chi-square test
+chisq_grade <- chisq.test(grade_table)
+chisq_grade
+```
+
+
+The Pearson Chi-square test indicates a highly significant association between loan grade and default status: p < 2e-16. The extremely large Chi-square statistic (5124) combined with an effectively zero p-value strongly rejects the null hypothesis of independence between loan grade and default status. This confirms that the observed differences in default rates across grades are not attributable to random variation. Given the previously observed monotonic increase in default probability from Grade A to Grade G, this test provides formal statistical validation that loan grade is a structurally significant risk separator within the portfolio.
+
+
+2. Income_group
+
+```{r}
+income_table <- table(credit_risk_dataset_clean$income_group, credit_risk_dataset_clean$loan_status)
+income_table
+chisq_income <- chisq.test(income_table)
+chisq_income
+```
+
+
+p<2e−16. The Chi-square test strongly rejects independence between income group and default status. The extremely large test statistic (1982) confirms that default probability differs significantly across income categories. Default declines from 46.5% (<30k) to 8.97% (100k–200k). Income level is therefore a statistically significant structural determinant of default risk.
+
+3. Person_home_ownership
+
+```{r}
+home_table <- table(credit_risk_dataset_clean$person_home_ownership, credit_risk_dataset_clean$loan_status)
+home_table
+chisq_home <- chisq.test(home_table)
+chisq_home
+```
+
+
+The Chi-square test confirms a statistically significant association between home ownership status and default behavior. The large test statistic (1653) indicates strong dependence. This supports the observed separation: default ranges from 6.7% (OWN) to 31.2% (RENT). Home ownership is therefore a statistically meaningful categorical risk factor.
+
+
+4. Employment_length
+
+```{r}
+emp_table <- table(credit_risk_dataset_clean$emp_group, credit_risk_dataset_clean$loan_status)
+emp_table
+
+chisq_emp <- chisq.test(emp_table)
+chisq_emp
+```
+ 
+
+The Chi-square test indicates a statistically significant association between employment length and default status. Although the test statistic (282) is smaller than for income or grade, the p-value confirms that differences are not due to random variation. This supports the observed decline in default from 28.1% (0–2 years) to 15.8% (10–20 years), indicating that employment stability reduces default risk.
+
+
+5. Loan_intent
+
+```{r}
+intent_table <- table(credit_risk_dataset_clean$loan_intent, credit_risk_dataset_clean$loan_status)
+intent_table
+chisq_intent <- chisq.test(intent_table)
+chisq_intent
+```
+
+
+The test statistic (465) indicates meaningful dependence, though weaker than for loan grade or income. This supports the observed variation from 14.6% (VENTURE) to 28.4% (DEBTCONSOLIDATION). Loan intent therefore contributes to risk differentiation, but with moderate strength relative to structural credit variables.
+
+
+6. Prior_default_history
+
+```{r}
+prior_table <- table(credit_risk_dataset_clean$cb_person_default_on_file, credit_risk_dataset_clean$loan_status)
+prior_table
+chisq_prior <- chisq.test(prior_table)
+chisq_prior
+```
+
+
+The Chi-square test strongly rejects independence between prior default history and current default status. The large test statistic (948) confirms substantial dependence. This supports the observed difference between 18.2% default (No prior default) and 37.8% default (Prior default). Borrowers with previous credit default exhibit approximately double the default probability, making prior default history a powerful binary risk indicator.
+
+
+## Category combinations
+
+Single-variable analysis tells us: Which categories are risky individually?
+Now we will test: Where are the most dangerous risk combinations?
+
+We start with the two strongest single predictors:Loan Grade × Income Group
+
+Computing combined default rate:
+
+```{r}
+combo_grade_income <- credit_risk_dataset_clean %>%
+  group_by(loan_grade, income_group) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+combo_grade_income
+```
+   
+We will remove small cells as they distort percentages.
+
+```{r}
+combo_filtered <- combo_grade_income %>%
+  filter(total_loans >= 50)
+combo_filtered
+```
+
+Heatmap visualization
+
+```{r}
+ggplot(combo_filtered,
+       aes(x = income_group,
+           y = loan_grade,
+           fill = default_rate)) +
+    geom_tile(color = "white") +
+    scale_fill_viridis_c(labels = scales::percent) +
+    labs(title = "Default Rate Heatmap: Loan Grade × Income Group",
+       x = "Income Group",
+       y = "Loan Grade",
+       fill = "Default Rate") +
+    theme_minimal()
+```
+
+
+The interaction analysis reveals strong amplification effects between credit grade and borrower income level.
+The highest-risk combination is Grade E with income <30k, exhibiting a default rate of 92.6%. Similarly, Grade D with income <30k shows 80.7%, and Grade F with income 30k–60k reaches 85.7%. These values indicate extreme risk concentration when weak credit grades coincide with low financial capacity.
+Importantly, default risk declines substantially as income increases within the same grade. 
+The most dangerous risk combinations are:
+Grade E × <30k
+Grade D × <30k
+Grade F × 30k–60k
+
+We also calculate another strong separators: home_ownership x Prior default
+
+```{r}
+home_prior_combo <- credit_risk_dataset_clean %>%
+  group_by(person_home_ownership, cb_person_default_on_file) %>%
+  summarise(
+    total_loans = n(),
+    defaults = sum(loan_status == "1"),
+    default_rate = mean(loan_status == "1"),
+    .groups = "drop"
+  )
+home_prior_combo
+```
+
+
+```{r}
+home_prior_filtered <- home_prior_combo %>%
+  filter(total_loans >= 30)
+home_prior_filtered
+```
+
+```{r}
+ggplot(home_prior_filtered,
+       aes(x = cb_person_default_on_file,
+           y = person_home_ownership,
+           fill = default_rate)) +
+    geom_tile(color = "white") +
+    scale_fill_viridis_c(labels = percent) +
+    labs(title = "Default Rate Heatmap: Home Ownership × Prior Default",
+       x = "Prior Default on File",
+       y = "Home Ownership",
+       fill = "Default Rate") +
+    theme_minimal()
+```
+
+
+The interaction reveals strong exaggeration effects between housing stability and prior credit behavior. The highest-risk segment is Renters with prior default (RENT × Y), exhibiting a default rate of 46.9%. In contrast, Owners without prior default (OWN × N) show the lowest default rate at 5.8%, resulting in a risk spread of over 41 percentage points. Prior default substantially increases risk across all housing categories.
+
+
+## Summary:
+
+Default risk varies significantly across borrower categories and is statistically significant for all major variables (Chi-square tests, p < 2e-16). The strongest separator is loan grade, where default increases from 9.6% (Grade A) to 98.3% (Grade G) (χ²=5124). Income also strongly differentiates risk, declining from 46.5% (<30k) to 8.97% (100k–200k) (χ²=1982). Interaction analysis reveals extreme risk concentration in combined weak profiles, particularly Grade E × <30k (92.6%) and Rent × Prior Default (46.9%). Overall, default risk is structurally driven by credit quality and financial capacity, with exaggeration effects occurring when low grade, low income, and prior default coincide.
+
+
+# SMART QUESTION 3:
+
+## Do Defaulted Borrowers Carry a Higher Loan to Income Burden, and Does Loan Intent Relate to Default Status? 
+
+## Introduction
+
+**SMART Question:** Is there a statistically significant difference in the average loan to income ratio between borrowers who defaulted and those who did not, and is there a significant association between loan intent and default status?
+
+From a bank's risk management perspective, understanding whether borrowers who default tend to have higher loan to income ratios and whether certain loan purposes are more prone to default can directly improve lending decisions. If a borrower's loan payment takes up a large share of their income, repayment becomes harder, as there is less room in their budget to absorb unexpected financial shocks such as job loss or medical emergencies. Similarly, certain loan purposes like debt consolidation or medical expenses may carry higher default risk than others, since borrowers taking loans for these reasons may already be in a financially vulnerable position.
+
+Identifying these patterns is valuable not only for individual loan decisions, but also for setting broader credit policy. By understanding which borrowers are at higher risk, banks can adjust interest rates, loan limits, or approval criteria to manage their overall exposure to default. This analysis aims to provide statistically grounded evidence to support such decisions.
+
+We used a **two-sample T-test** to compare loan to income ratios between defaulted and non-defaulted borrowers, and a **Chi-Square test** to examine whether loan intent and default status are associated.
+
+---
+
+## Loading the Data
+
+```{r load-data}
+library(ggplot2)
+library(dplyr)
+
+# Load the dataset
+df <- read.csv("credit_risk_dataset.csv")
+
+# Convert loan_status to a labeled factor for clarity
+df$loan_status <- factor(df$loan_status, levels = c(0, 1), labels = c("No Default", "Default"))
+str(df)
+```
+
+---
+
+## Dataset Summary
+
+```{r summary}
+summary(df)
+```
+
+The dataset contains 32,581 observations across 12 variables. The key variables for this analysis are `loan_percent_income` (the ratio of loan amount to annual income), `loan_status` (whether the borrower defaulted, where 1 = Default and 0 = No Default), and `loan_intent` (the stated purpose of the loan). Other variables such as borrower age, income, employment length, and credit history length provide useful context, but the three variables above are central to answering my SMART question. Before starting the analysis, we converted `loan_status` into a labeled factor to make outputs more readable and interpretable.
+
+---
+
+## Descriptive Statistics
+
+### Loan to Income Ratio by Default Status
+
+```{r descriptive-stats}
+lpi_summary <- df %>%
+  group_by(loan_status) %>%
+  summarise(
+    Count    = n(),
+    Mean     = round(mean(loan_percent_income, na.rm = TRUE), 4),
+    Median   = round(median(loan_percent_income, na.rm = TRUE), 4),
+    Std_Dev  = round(sd(loan_percent_income, na.rm = TRUE), 4),
+    Variance = round(var(loan_percent_income, na.rm = TRUE), 4),
+    Min      = round(min(loan_percent_income, na.rm = TRUE), 4),
+    Max      = round(max(loan_percent_income, na.rm = TRUE), 4)
+  )
+
+lpi_summary
+```
+
+Right away we can see a meaningful difference: borrowers who defaulted have a noticeably higher mean loan to income ratio compared to those who did not. The standard deviation is also higher in the default group, suggesting more variability in how much of their income those borrowers were putting toward loan payments. This greater spread in the default group indicates that while some defaulted borrowers had moderate loan burdens, many were carrying an unusually high proportion of debt relative to their income. Even the median value is higher for the default group, which confirms this is not just driven by a few extreme outliers but reflects a genuine shift in the distribution. These descriptive statistics already point strongly toward the conclusion we will confirm with formal hypothesis testing.
+
+---
+
+## Graphical Exploration
+
+### Boxplot: Loan-to-Income Ratio by Default Status
+
+```{r boxplot-default}
+ggplot(df, aes(x = loan_status, y = loan_percent_income, fill = loan_status)) +
+  geom_boxplot(outlier.alpha = 0.2, outlier.size = 1) +
+  scale_fill_manual(values = c("No Default" = "green", "Default" = "orange")) +
+  labs(
+    title = "Loan-to-Income Ratio by Default Status",
+    x = "Loan Status",
+    y = "Loan-to-Income Ratio",
+    fill = "Loan Status"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "none")
+```
+
+The boxplot clearly shows that defaulted borrowers have a higher median loan to income ratio and a wider spread. The interquartile range for the default group is noticeably larger, meaning there is more variation in loan burden among defaulted borrowers. The presence of outliers on the upper end for both groups is expected in financial data, but the overall shift upward for the default group is the key takeaway. This visual already hints at what our T-test will confirm statistically.
+
+### Bar Chart: Default Rate by Loan Intent
+
+```{r bar-default-intent}
+intent_default <- df %>%
+  group_by(loan_intent, loan_status) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  group_by(loan_intent) %>%
+  mutate(Proportion = round(Count / sum(Count), 3))
+
+ggplot(intent_default, aes(x = loan_intent, y = Proportion, fill = loan_status)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("No Default" = "blue", "Default" = "red")) +
+  labs(
+    title = "Default Rate by Loan Intent",
+    x = "Loan Intent",
+    y = "Proportion",
+    fill = "Loan Status"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 15, hjust = 1))
+```
+
+This stacked bar chart shows the proportion of defaults within each loan intent category. Some loan purposes appear to have a noticeably higher share of defaults than others, which is exactly what the Chi-Square test will examine.
+
+### Histogram: Distribution of Loan to Income Ratio by Default Status
+
+```{r histogram}
+ggplot(df, aes(x = loan_percent_income, fill = loan_status)) +
+  geom_histogram(bins = 40, alpha = 0.6, position = "identity") +
+  scale_fill_manual(values = c("No Default" = "yellow", "Default" = "red")) +
+  labs(
+    title = "Distribution of Loan-to-Income Ratio by Default Status",
+    x = "Loan-to-Income Ratio",
+    y = "Count",
+    fill = "Loan Status"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+The histogram shows that the distribution for defaulted borrowers is shifted to the right, meaning they tend to have higher loan to income ratios. Both distributions are right skewed, which is typical for financial ratio data.
+
+---
+
+## Two-Sample T-Test
+
+For this test, we wanted to examine whether the mean loan to income ratio is significantly higher for borrowers who defaulted compared to those who did not.
+
+**Hypotheses:**
+
+- **H0:** There is no difference in the mean loan to income ratio between defaulted and non-defaulted borrowers
+- **H1:** Defaulted borrowers have a significantly higher mean loan to income ratio
+- **Significance level:** alpha = 0.05
+
+```{r ttest}
+default_group    <- df$loan_percent_income[df$loan_status == "Default"]
+no_default_group <- df$loan_percent_income[df$loan_status == "No Default"]
+
+t_result <- t.test(default_group, no_default_group, alternative = "greater")
+t_result
+```
+
+**Interpretation:** If the p-value is below 0.05, we reject the null hypothesis and conclude that defaulted borrowers carry a significantly higher loan burden relative to their income. The 95% confidence interval gives us an estimated range for the true difference in means between the two groups. A positive lower bound on that interval further confirms the direction of the effect.
+
+---
+
+## Chi-Square Test of Independence
+
+Next, we tested whether loan intent and default status are related, or whether they are independent of each other.
+
+**Hypotheses:**
+
+- **H0:** Loan intent and default status are independent knowing the loan intent tells us nothing about default likelihood
+- **H1:** There is a significant association between loan intent and default status
+- **Significance level:** alpha = 0.05
+
+```{r chisq}
+# A contingency table of loan_intent vs loan_status
+contingency_table <- table(df$loan_intent, df$loan_status)
+contingency_table
+
+# Chi-Square test
+chi_result <- chisq.test(contingency_table)
+chi_result
+```
+
+```{r chisq-residuals}
+# Standardized residuals show which specific categories drive the association
+# Values above +2 or below -2 are considered noteworthy
+round(chi_result$stdres, 2)
+```
+
+**Interpretation:** The standardized residuals tell us where the biggest deviations from expected counts are. A positive value above +2 means more defaults in that loan intent category than expected by chance. A negative value below -2 means fewer defaults than expected. This helps identify which loan purposes are most strongly linked to default risk.
+
+---
+
+## Summary
+
+**T-Test findings:** The two sample T-test tests whether defaulted borrowers on average carry a higher loan to income ratio. Based on the descriptive statistics we can already see a gap in group means (~0.47 for defaulted vs ~0.35 for non-defaulted borrowers). With a sample of 32,000+ observations, the T-test has strong statistical power to detect real differences. The p-value of less than 2.2e-16 is essentially zero, which means we reject the null hypothesis with very high confidence. The confidence interval and p-value together tell us both the direction and significance of the effect, confirming that loan burden is a meaningful predictor of default risk.
+
+**Chi-Square findings:** The Chi-Square test tells us whether the proportion of defaults is evenly spread across loan intent categories, or whether some categories are statistically over or underrepresented in defaults. The results show that Personal and Debt Consolidation loans have the highest default rates at approximately 36 to 37%, while other categories like Education or Home Improvement show lower default rates. Looking at the stacked bar chart and standardized residuals together helps pinpoint which loan purposes carry the most risk. The p-value here is also essentially zero, so we reject the null hypothesis and conclude that loan intent is significantly associated with default status.
+
+Both analyses paint a clear picture of what drives loan default. Borrowers who take on a larger loan relative to their income are significantly more likely to default. Additionally, the reason a borrower takes out a loan matters certain loan purposes are associated with substantially higher default rates. Based on my findings, we recommend that banks incorporate both the loan to income ratio and loan intent into their credit risk models to make more informed lending decisions.
+
+---
+
+# SMART QUESTION 4:
+
+## Which loan intent could generate more revenue for the bank in year 2?
+
+## Introduction
+
+To answer this question, we must look at it from the lens of a marking strategy for the bank. We need to look at the relationship between revenue and default rates to see which loan intent can provide an area of opportunity. The overall revenue, default rates, number of loans, and average loan amount per loan intent can start the conversation. From there we can later look at profitability and over-leveraged loan intents to contribute to formulating our conclusion.
+
+## Total Revenue per Loan Intent (Non-Default Loans)
+```{r}
+# Load library for data manipulation
+library(dplyr)
+
+# 1. Which loan intent generated the most revenue?
+# Revenue is calculated for non-defaulted loans (loan_status == 0)
+#Average Revenue per loan intent based on the number of loans
+revenue_per_intent <- credit_risk_dataset_clean %>%
+  filter(loan_status == 0) %>%
+  mutate(revenue = loan_amnt * (loan_int_rate / 100)) %>%
+  group_by(loan_intent) %>%
+  summarise(
+    total_revenue = sum(revenue),
+    num_loans = n(),
+    average_revenue = mean(revenue)
+  ) %>%
+  arrange(desc(average_revenue))
+
+# Print revenue by loan intent
+print(revenue_per_intent)
+
+# Load necessary libraries for plotting
+library(ggplot2)
+
+# 1. Revenue Plot
+p1 <- revenue_per_intent %>%
+  ggplot(aes(x = reorder(loan_intent, -total_revenue), y = total_revenue, fill = loan_intent)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title = "Total Annual Revenue", x = "Loan Intent", y = "Revenue ($)") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Revenue Plot Per Loan Intent- Plot 1
+print(p1)
+
+```
+
+Based on the dataset, we can see that the Education loan intent has the highest overall revenue. Another layer we wanted to analyze was the number of loans per loan intent and the average loan amount per loan intent. This gives us the wholistic picture needed to answer this question. Home improvement has the highest average revenue based on the number of loans. Education and venture could be candidates for where we could strategize next year's efforts to increase the bank's revenue for year 2. Only non-default loans were included because those are loans where the bank is still receiving payments.
+
+## Number of Loans per Loan Intent
+```{r, echo = TRUE}
+# 2. Number of Loans per Loan Intent
+loans_per_intent <- credit_risk_dataset_clean %>%
+  group_by(loan_intent) %>%
+  summarise(number_of_loans = n()) %>%
+  arrange(desc(number_of_loans))
+
+# Print Number of Loans per Loan Intent
+print(loans_per_intent)
+
+# 2. Loan Count Plot
+p2 <- loans_per_intent %>%
+  ggplot(aes(x = reorder(loan_intent, -number_of_loans), y = number_of_loans, fill = loan_intent)) +
+  geom_col() +
+  theme_minimal() +
+  labs(title = "Number of Loans", x = "Loan Intent", y = "Count") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Number of Loans per Intent - Plot 2
+print(p2)
+
+```
+
+Differently from the previous step, we see that the Education loan intent has the highest amount of loans. Whereas Home Improvement has the least amount. This count includes default loans since we are searching for loans in total. Perhaps there is a high percentage of default Education loans versus the other loan intents.
+
+## Default Rate per Loan Intent
+```{r}
+# 3. Default Rate per Loan Intent
+overall_default_rate_clean <- mean(as.numeric(as.character(credit_risk_dataset_clean$loan_status)))
+result <- round(overall_default_rate_clean, 4) * 100
+
+# Print average default. Combine the number and the % sign
+print(paste0("Overall Average Default Rate: ", result, "%"))
+
+# Convert factor back to numeric for calculation
+default_rates <- credit_risk_dataset_clean %>%
+  group_by(loan_intent) %>%
+  summarise(default_rate = mean(as.numeric(as.character(loan_status)))) %>%
+  arrange(desc(default_rate))
+
+# Print Default Rate per Intent
+print(default_rates)
+
+# Default Rate Plot
+p3 <- default_rates %>%
+  ggplot(aes(x = reorder(loan_intent, -default_rate), y = default_rate, fill = loan_intent)) +
+  geom_col() +
+  # Add the horizontal red line
+  geom_hline(yintercept = overall_default_rate_clean, color = "red", linetype = "dashed", size = 1) +
+  # Optional: Add a text label for the line
+  annotate("text", x = 1, y = overall_default_rate_clean + 0.01, label = "Overall Average", color = "red", hjust = 0) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_minimal() +
+  labs(
+    title = "Default Rate by Intent vs. Overall Average",
+    subtitle = paste("Overall Average Default Rate:", round(overall_default_rate_clean * 100, 2), "%"),
+    x = "Loan Intent", 
+    y = "Default Rate (%)"
+  ) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Default Rate per Loan Intent - Plot 3
+print(p3)
+```
+
+The average default rate for the entire dataset is 21.66%. As expected, Debt Consolidation is the default loan leader. The loan intents with default rates above the mean are Debt Consolidation, Medical, and Home Improvement. Venture has the lowest rate; Education is the second lowest. One reason that Venture and Education could have lower default rates could be the interest rate or the loan term. Loan term is not a given field, but we could factor the debt-to-income ratio and the loan interest rates.
+
+## Average Consumer Age Per Loan Intent
+```{r}
+# 4. Average Consumer Age Per Loan Intent
+# Calculate the average consumer age
+avg_age_overall <- mean(credit_risk_dataset_clean$person_age)
+
+# Calculate the average consumer age per loan intent
+avg_age_per_intent <- credit_risk_dataset_clean %>%
+  group_by(loan_intent) %>%
+  summarise(avg_age = mean(person_age)) %>%
+  arrange(desc(avg_age))
+
+# Print Average Consumer Age Per Loan Intent
+print(paste("Overall Average Age of Borrower:", round(avg_age_overall, 2)))
+print(avg_age_per_intent)
+
+# 4. Average Age Plot
+p4 <- avg_age_per_intent %>%
+  ggplot(aes(x = reorder(loan_intent, -avg_age), y = avg_age, fill = loan_intent)) +
+  geom_col() +
+  geom_hline(yintercept = avg_age_overall, linetype = "dashed", color = "red") +
+  coord_cartesian(ylim = c(20, 30)) + # Zoom in to see differences
+  theme_minimal() +
+  labs(title = "Average Age of Borrower", 
+       subtitle = paste("Red line = Overall Average (", round(avg_age_overall, 1), ")"),
+       x = "Loan Intent", y = "Age") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Average Consumer Age Per Loan Intent - Plot 4
+print(p4)
+```
+
+Home Improvement has the oldest average age and Education has the lowest. Venture and Debt Consolidation have average ages below the overall data average. This is expected for Education given that traditionally consumers take out this form of loan for undergraduate degrees. We chose this question because we did not want to recommend a loan intent that would not be suitable based on the average banking consumer's age group. Given that the average age for all the loan intents are close, it allows all loan intents to be considered for our recommendation.
+
+
+## Net Revenue & Interest-to-Loss Ratio
+```{r}
+# Load library for mapping data to aesthetics for graphical scales
+library(scales)
+library(dplyr)
+library(ggplot2)
+
+# 5. Net Revenue & Interest-to-Loss Ratio
+# Calculate individual interest and loss values
+profitability_data <- credit_risk_dataset_clean %>%
+  mutate(
+    interest_earned = ifelse(loan_status == 0, loan_amnt * (loan_int_rate / 100), 0),
+    principal_lost = ifelse(loan_status == 1, loan_amnt, 0)
+  )
+
+# Calculate the overall average ratio for the red line
+overall_interest_total <- sum(profitability_data$interest_earned, na.rm = TRUE)
+overall_loss_total <- sum(profitability_data$principal_lost, na.rm = TRUE)
+overall_avg_ratio <- overall_interest_total / overall_loss_total
+
+# Summarize by loan intent for the bars
+profitability_analysis <- profitability_data %>%
+  group_by(loan_intent) %>%
+  summarise(
+    total_interest = sum(interest_earned),
+    total_loss = sum(principal_lost),
+    net_profit = total_interest - total_loss,
+    interest_loss_ratio = total_interest / total_loss
+  ) %>%
+  arrange(desc(interest_loss_ratio))
+
+print(profitability_analysis)
+
+# 5. Interest-to-Loss Ratio (Efficiency Metric)
+p5 <- ggplot(profitability_analysis, aes(x = reorder(loan_intent, -interest_loss_ratio), y = interest_loss_ratio, fill = loan_intent)) +
+  geom_col() +
+  # Add the horizontal red line for the overall average
+  geom_hline(yintercept = overall_avg_ratio, color = "red", linetype = "dashed", size = 1) +
+  # Add a text label for the average line
+  annotate("text", x = 1.5, y = overall_avg_ratio + 0.02, 
+           label = paste("Overall Average:", round(overall_avg_ratio, 3)), 
+           color = "red", fontface = "bold", hjust = 0) +
+  theme_minimal() +
+  labs(title = "Interest-to-Loss Ratio by Intent",
+       subtitle = paste("Overall Efficiency Average:", round(overall_avg_ratio, 3)),
+       x = "Loan Intent", y = "Ratio ($ Earned / $ Lost)") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Net Revenue & Interest-to-Loss Ratio - Plot 5
+print(p5)
+```
+
+The interest-to-loss ratio is a measure of profitability. It measures the interest revenue gained from non-default borrowers vs. the amount lost from defaulted borrowers. Medical and Debt Consolidation are loan intents below average. This signals that those intents have a higher default rate and a greater chance that we are not collecting payments from those consumers. On the contrary, Venture is above 50%. Given it has the lowest default rate, and second highest overall revenue, this is expected that the bank has a high probability of receiving a payment from these borrowers. 
+
+## Loan Grade Distribution per Intent
+```{r}
+# Loan Grade Distribution per Intent
+# This helps see if certain intents are naturally "riskier" grades (E, F, G)
+grade_dist <- credit_risk_dataset_clean %>%
+  group_by(loan_intent, loan_grade) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count))
+
+# 6. Stacked Bar Chart of Grades
+p6 <- ggplot(grade_dist, aes(x = loan_intent, y = percentage, fill = loan_grade)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  theme_minimal() +
+  labs(title = "Loan Grade Distribution by Intent",
+       x = "Loan Intent", y = "Percentage of Portfolio", fill = "Loan Grade") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Plot Loan Grade Distribution per Intent - Plot 6 
+print(p6)
+```
+
+Earlier we analyzed the average default rate and profitability per loan intent. We wanted to break down the overall loan grades for the dataset. This could confirm the loan intents to avoid if most of their loans were lower graded. The dataset did not share details on the criteria for the grading; however, we can make assumptions on the riskiness of a consumer based on this variable and a combination of other variables. Surprisingly, for all loan intents about 3/4's have loans between A and C. This is a good sign that the loans distributed by the bank were to moderate to low risky consumers. Lastly, this plot alone cannot help to identify a favorable loan intent to answer the overall question.
+
+## Average Loan-to-Income (LTI) Ratio
+```{r}
+# 7. Average Loan-to-Income (LTI) Ratio
+# High LTI ratios are often leading indicators of future defaults
+lti_analysis <- credit_risk_dataset_clean %>%
+  group_by(loan_intent) %>%
+  summarise(avg_lti = mean(loan_percent_income)) %>%
+  arrange(desc(avg_lti))
+
+# 7. Average LTI
+p7 <- ggplot(lti_analysis, aes(x = reorder(loan_intent, -avg_lti), y = avg_lti, fill = loan_intent)) +
+  geom_col() +
+  scale_y_continuous(labels = percent_format()) +
+  theme_minimal() +
+  labs(title = "Average Loan-to-Income (LTI) Ratio",
+       x = "Loan Intent", y = "Average LTI (%)") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print Average Loan-to-Income (LTI) Ratio - Plot 7
+print(p7)
+```
+
+Average loan-to-income (LTI) is used to identify borrowers who over-leveraged a loan based on their income. For example, if a borrower has a LTI above 30% and a moderate interest rate, that might lead to a higher chance of defaulting on the loan. Seems like none of the loan intents are outliers from the average. Medical does have the highest value but by a slight margin. Like the previous plot, this metric demonstrates that the bank did not supply loans to overly risky consumers. Again, not enough evidence can be driven solely from this plot to answer the overall question.
+
+## Summary
+
+The two loan intents that can aid the bank's revenue for year 2 are Venture and Education. Both are the highest two revenue leaders and have the lowest two default rates. Combined they account for $9.06 million in revenue for the year. However, while those metrics are impressive, the profitability and average loan-to-income ratios are what solidified their position. Venture has a profitability of over 50%, which corresponds to its low default rate. This signifies that more than half of the Venture loan borrowers are making payments on their loans. To conclude, Venture amassed a high year 1 revenue, maintained the lowest default rate, and had an average loan amount near the top of all loan intents. This is why Venture is our recommended loan intent to focus efforts on for year 2.
+
+# Overall Conclusions
+
+First-year income is primarily driven by portfolio volume in middle-income and younger borrower segments, while higher-income borrowers generate greater per-loan profitability.
+
+Default risk is strongly determined by credit grade, income level, and prior default history, with default rates increasing from 9.6% in Grade A to 98.3% in Grade G and declining from 46.5% in the lowest income tier to below 10% in higher tiers.
+
+Defaulted borrowers have much higher loan to income ratio (0.47 vs 0.35). Personal and Debt Consolidation loans have highest default rates (~36-37%). Loan burden and loan purpose are strong signals of default risk and must be considered during credit allocation.
+
+Education and Venture loans generated the highest total revenue in the first year and exhibited default rates below the 21.66% average as well as counted for the highest loan volumes (9,003 combined loans).
+
+
+# Project 2 - SMART Question 3
+
+```{r}
+# ============================================================
+# Project 2 — SMART Question: SLR of Income on Loan Amount
+# ============================================================
+
+# Load libraries
+library(ggplot2)
+library(dplyr)
+
+# Load data
+df <- read.csv("credit_risk_dataset.csv")
+```
+
+# Step 1: Data Prepration
+```{r}
+# Remove extreme income outliers (Class 7: check for influential points)
+# The dataset has a max income of $6M vs a median of $55K — worth flagging
+summary(df$person_income)
+summary(df$loan_amnt)
+
+# Filter to a reasonable income range (e.g., below 99th percentile)
+income_99th <- quantile(df$person_income, 0.99)
+df_clean <- df %>% filter(person_income <= income_99th)
+
+cat("Rows before filter:", nrow(df), "\n")
+cat("Rows after filter:", nrow(df_clean), "\n")
+```
+
+# Step 2: EDA — Scatter plot & Pearson Correlation
+```{r}
+# (Class 7: Correlation Analysis)
+
+# Pearson correlation coefficient
+r <- cor(df_clean$person_income, df_clean$loan_amnt, method = "pearson")
+cat("Pearson r:", round(r, 4), "\n")
+
+# Scatter plot with regression line
+ggplot(df_clean, aes(x = person_income, y = loan_amnt)) +
+  geom_point(alpha = 0.15, color = "#3B8BD4", size = 0.8) +
+  geom_smooth(method = "lm", color = "#D85A30", se = TRUE, linewidth = 1) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Loan Amount vs. Borrower Income",
+    subtitle = paste0("Pearson r = ", round(r, 3)),
+    x = "Annual Income ($)",
+    y = "Loan Amount ($)"
+  ) +
+  theme_minimal()
+```
+
+# Steps 3: Fit the Simple Linear Regression Model
+```{r}
+# (Class 7: Linear Model Formulation — lm())
+
+# Model: loan_amnt = b0 + b1 * person_income + epsilon
+slr_model <- lm(loan_amnt ~ person_income, data = df_clean)
+
+# Full summary: coefficients, R², F-test, p-values
+summary(slr_model)
+```
+
+# Step 4: Interpret the Coefficients
+```{r}
+# (Class 7: Coefficient Interpretation)
+
+# Extract coefficients
+b0 <- coef(slr_model)[1]   # Intercept
+b1 <- coef(slr_model)[2]   # Slope for person_income
+
+cat("\n--- Regression Equation ---\n")
+cat(sprintf("loan_amnt = %.2f + %.6f * person_income\n", b0, b1))
+
+cat("\n--- Interpretation ---\n")
+cat(sprintf("Intercept (b0 = %.2f): Expected loan amount when income = $0.\n", b0))
+cat(sprintf("Slope (b1 = %.6f): For every $1 increase in income,\n  loan amount increases by $%.4f on average.\n", b1, b1))
+cat(sprintf("Equivalently: $10,000 more income → $%.2f more loan requested.\n", b1 * 10000))
+```
+
+# Step 5: R² — Coefficient of Determination
+```{r}
+# (Class 7: R² = SSRegression / SSTotal)
+r_squared     <- summary(slr_model)$r.squared
+adj_r_squared <- summary(slr_model)$adj.r.squared
+
+cat("\n--- Model Fit ---\n")
+cat(sprintf("R²         = %.4f → %.1f%% of variation in loan amount is explained by income.\n",
+            r_squared, r_squared * 100))
+cat(sprintf("Adjusted R² = %.4f\n", adj_r_squared))
+cat(sprintf("Note: R² = r² = (%.4f)² = %.4f ✓  (true for SLR)\n", r, r^2))
+```
+
+# Step 6: ANOVA F-Test For Model Fit
+```{r}
+# (Class 7: F-Test — is the model better than the null/intercept-only model?)
+
+# Compare the SLR model vs. null model (intercept only)
+null_model <- lm(loan_amnt ~ 1, data = df_clean)
+anova(null_model, slr_model)
+```
+
+# Step 7: Assumption Checks - Residual Diagnostics
+```{r}
+# (Class 7: Linearity, Homoskedasticity, Normality of residuals)
+
+# Base R diagnostic plots (4-panel)
+par(mfrow = c(2, 2))
+plot(slr_model)
+par(mfrow = c(1, 1))
+
+# ggplot versions for cleaner reporting:
+
+df_clean$fitted    <- fitted(slr_model)
+df_clean$residuals <- residuals(slr_model)
+
+# (a) Residuals vs Fitted — check linearity & homoskedasticity
+ggplot(df_clean, aes(x = fitted, y = residuals)) +
+  geom_point(alpha = 0.1, color = "#3B8BD4", size = 0.7) +
+  geom_hline(yintercept = 0, color = "#D85A30", linewidth = 0.8) +
+  geom_smooth(se = FALSE, color = "#1D9E75", linewidth = 0.7) +
+  labs(
+    title = "Residuals vs Fitted Values",
+    subtitle = "Check: residuals should scatter randomly around 0 (homoskedasticity)",
+    x = "Fitted Values ($)",
+    y = "Residuals ($)"
+  ) +
+  theme_minimal()
+
+# (b) Q-Q Plot — check normality of residuals
+ggplot(df_clean, aes(sample = residuals)) +
+  stat_qq(alpha = 0.2, color = "#3B8BD4", size = 0.8) +
+  stat_qq_line(color = "#D85A30", linewidth = 0.8) +
+  labs(
+    title = "Normal Q-Q Plot of Residuals",
+    subtitle = "Check: points should follow the red line for normality",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  ) +
+  theme_minimal()
+```
+
+# Step 8: Residual Standard Error (RMSE)
+```{r}
+# (Class 9: Model assessment)
+rmse <- sqrt(mean(residuals(slr_model)^2))
+cat(sprintf("\nRMSE (Residual Std Error) = $%.2f\n", rmse))
+cat("This is the typical prediction error of the model in dollar terms.\n")
+```
+
+# Step 9: Prediction Example
+```{r}
+new_data <- data.frame(person_income = c(40000, 75000, 120000))
+predictions <- predict(slr_model, newdata = new_data, interval = "confidence")
+pred_table  <- cbind(new_data, predictions)
+print(pred_table)
+```
+
+
+
+
