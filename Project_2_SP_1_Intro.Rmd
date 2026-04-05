@@ -1,0 +1,51 @@
+---
+title: "Project 2: Predictive Modeling:- Logistic Regression for Loan Default Prediction"
+author: "Soumay Patidar"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r init, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+options(scipen = 999)
+
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(pROC)
+```
+
+# Introduction
+
+**The objective of SMART Question 3 is to build a predictive model that estimates the probability of loan default for a borrower using demographic and financial variables. Logistic regression is the appropriate method because the response variable (loan_status) is binary: either a borrower defaults (1) or does not default (0).**
+
+**Key steps in this analysis:**
+
+**1. Prepare and clean the data**
+
+**2. Split data into training (70%) and testing (30%) sets**
+
+**3. Build a logistic regression model using the training data**
+
+**4. Make predictions on the test set**
+
+**5. Evaluate model performance using multiple metrics:**
+
+- **Accuracy: Overall percentage of correct predictions**
+- **Confusion Matrix: Breakdown of correct and incorrect predictions**
+- **Precision: Of predictions we made, how many were correct?**
+- **Recall: Of actual defaults, how many did we catch?**
+- **F1-Score: Balanced measure of precision and recall**
+- **ROC Curve and AUC: Model's ability to discriminate between defaults and non-defaults**
+
+**6. Interpret coefficients to identify which borrower characteristics drive default risk**
