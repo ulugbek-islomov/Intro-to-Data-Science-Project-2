@@ -1,0 +1,173 @@
+---
+title: "Project 2: Predictive Modeling:- Logistic Regression for Loan Default Prediction"
+author: "Soumay Patidar"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r init, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+options(scipen = 999)
+
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(pROC)
+```
+
+# Introduction
+
+**The objective of SMART Question 3 is to build a predictive model that estimates the probability of loan default for a borrower using demographic and financial variables. Logistic regression is the appropriate method because the response variable (loan_status) is binary: either a borrower defaults (1) or does not default (0).**
+
+**Key steps in this analysis:**
+
+**1. Prepare and clean the data**
+
+**2. Split data into training (70%) and testing (30%) sets**
+
+**3. Build a logistic regression model using the training data**
+
+**4. Make predictions on the test set**
+
+**5. Evaluate model performance using multiple metrics:**
+
+- **Accuracy: Overall percentage of correct predictions**
+- **Confusion Matrix: Breakdown of correct and incorrect predictions**
+- **Precision: Of predictions we made, how many were correct?**
+- **Recall: Of actual defaults, how many did we catch?**
+- **F1-Score: Balanced measure of precision and recall**
+- **ROC Curve and AUC: Model's ability to discriminate between defaults and non-defaults**
+
+**6. Interpret coefficients to identify which borrower characteristics drive default risk**
+
+# Data Preparation
+
+**Before building the model, we need to prepare the data by converting variables to the correct data types and handling missing values.**
+
+## Load Data
+
+```{r}
+credit_data <- read.csv("credit_risk_dataset.csv")
+
+# Inspect structure of the dataset
+str(credit_data)
+
+# Preview first few rows
+head(credit_data)
+
+# Check missing values in each column
+colSums(is.na(credit_data))
+```
+
+## Convert Target Variable to Factor
+
+**The loan_status variable is our target variable (what we want to predict). We convert it to a factor because it has two categories: 0 (No Default) and 1 (Default).**
+
+```{r}
+credit_data$loan_status <- as.factor(credit_data$loan_status)
+```
+
+## Convert Categorical Variables to Factors
+
+**These variables represent categories, not numbers. Converting them to factors ensures R treats them as categories, not numeric values.**
+
+```{r}
+credit_data$person_home_ownership <- as.factor(credit_data$person_home_ownership)
+credit_data$loan_intent <- as.factor(credit_data$loan_intent)
+credit_data$loan_grade <- as.factor(credit_data$loan_grade)
+credit_data$cb_person_default_on_file <- as.factor(credit_data$cb_person_default_on_file)
+```
+
+## Remove Missing Values
+
+**Some rows have missing data (NA). We remove these rows to ensure our model only uses complete observations.**
+
+```{r}
+credit_data <- na.omit(credit_data)
+```
+
+# Train-Test Split (70/30)
+
+**To properly evaluate our model, we split the data into two parts:**
+
+**- Training set (70%): Used to build the model**
+
+**- Testing set (30%): Used to evaluate how well the model predicts on new data**
+
+**This prevents overfitting and gives us a realistic estimate of model performance.**
+
+```{r}
+set.seed(123)
+
+train_index <- createDataPartition(credit_data$loan_status, p = 0.7, list = FALSE)
+
+train_data <- credit_data[train_index, ]
+test_data  <- credit_data[-train_index, ]
+
+dim(train_data)
+dim(test_data)
+```
+
+# Logistic Regression Model
+
+**Logistic regression is a classification method that estimates the probability of a binary outcome. It models the relationship between borrower characteristics (demographic and financial) and the probability of default.**
+
+**The model formula below includes:**
+
+- **person_income: Annual income of the borrower**
+- **person_emp_length: Employment duration in months**
+- **person_home_ownership: Whether borrower owns, rents, or has mortgage**
+- **loan_amnt: Amount of the loan**
+- **loan_int_rate: Interest rate on the loan**
+- **loan_percent_income: Ratio of loan to borrower's income**
+- **person_age: Age of the borrower**
+- **cb_person_cred_hist_length: Length of borrower's credit history**
+
+```{r}
+model_logit <- glm(loan_status ~ person_income +
+                     person_emp_length +
+                     person_home_ownership +
+                     loan_amnt +
+                     loan_int_rate +
+                     loan_percent_income +
+                     person_age +
+                     cb_person_cred_hist_length,  data = train_data, family = binomial)
+
+summary(model_logit)
+```
+
+**The summary output shows:**
+
+- **Coefficients: How much each variable affects the probability of default (positive = increases risk, negative = decreases risk)**
+- **Std. Error: How uncertain we are about each coefficient**
+- **z value: How far the coefficient is from zero (larger absolute values = more significant)**
+- **Pr(>|z|): The p-value (< 0.05 indicates the variable is statistically significant)**
+
+# Model Evaluation
+
+**After building the model, we evaluate how well it predicts loan defaults on new (test) data.**
+
+## Predicted Probabilities
+
+**The model gives us a probability between 0 and 1 for each loan in the test set. A probability of 0.8 means the model predicts an 80% chance that loan will default.**
+
+**We convert these probabilities to class predictions using a threshold: probabilities > 0.5 are classified as "Default" (1), and probabilities ≤ 0.5 are classified as "No Default" (0).**
+
+```{r}
+# Generate predicted probabilities from the model
+probabilities <- predict(model_logit, test_data, type = "response")
+
+# Convert probabilities to class predictions using 0.5 threshold
+predicted_class <- ifelse(probabilities > 0.5, 1, 0)
+predicted_class <- as.factor(predicted_class)
+```
