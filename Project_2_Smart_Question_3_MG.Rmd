@@ -1,0 +1,403 @@
+---
+title: "Project_2_SMART_Question_3"
+author: "Maurice Goode"
+date: "2026-04-12"
+output: html_document
+---
+
+# Project 2 - SMART Question 3
+
+```{r}
+# ============================================================
+# Project 2 — SMART Question: SLR of Income on Loan Amount
+# ============================================================
+
+# Load libraries
+library(ggplot2)
+library(dplyr)
+
+# Load data
+df <- read.csv("credit_risk_dataset.csv")
+```
+
+# Step 1: Data Prepration
+```{r}
+# Load Libraries
+library(ggplot2)
+library(dplyr)
+library(rpart)          # Decision tree (Class 12)
+library(rpart.plot)     # Tree visualization
+library(randomForest)   # Bagging & random forest (Class 12)
+library(pROC)           # ROC-AUC (Class 11)
+library(caret)          # Confusion matrix helper
+
+# Load & Prepare Data
+df <- read.csv("credit_risk_dataset.csv")
+
+# Convert categorical variables to factors (as done in Project 1)
+df$person_home_ownership      <- as.factor(df$person_home_ownership)
+df$loan_intent                <- as.factor(df$loan_intent)
+df$loan_grade                 <- as.factor(df$loan_grade)
+df$cb_person_default_on_file  <- as.factor(df$cb_person_default_on_file)
+df$loan_status                <- as.factor(df$loan_status)   # 0=non-default, 1=default
+
+df <- na.omit(df)
+
+cat("Rows after NA removal:", nrow(df), "\n")   # expect ~28,638
+
+# Check class balance (important for classification — Class 11)
+table(df$loan_status)
+prop.table(table(df$loan_status))
+
+# Quick look at interest rate vs default
+ggplot(df, aes(x = loan_status, y = loan_int_rate, fill = loan_status)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("#3B8BD4", "#D85A30"),
+                    labels = c("Non-default", "Default")) +
+  labs(
+    title = "Loan Interest Rate by Default Status",
+    subtitle = "Visual check: does interest rate differ between groups?",
+    x = "Loan Status (0 = Non-default, 1 = Default)",
+    y = "Interest Rate (%)",
+    fill = "Status"
+  ) +
+  theme_minimal()
+```
+
+# Step 2: Train/Test Split (80/20)
+```{r}
+
+# (Class 12: randomly assign observations — do not take first x%)
+set.seed(42)   # Reproducibility
+
+n         <- nrow(df)
+train_idx <- sample(1:n, size = floor(0.80 * n), replace = FALSE)
+
+train <- df[ train_idx, ]
+test  <- df[-train_idx, ]
+
+cat("Training rows:", nrow(train), "\n")
+cat("Test rows    :", nrow(test),  "\n")
+cat("Default rate (train):", round(mean(train$loan_status == 1), 3), "\n")
+cat("Default rate (test) :", round(mean(test$loan_status  == 1), 3), "\n")
+```
+
+# Step 3: Model 1- Logistic Regression (MLR with logit link)
+```{r}
+# MODEL 1: LOGISTIC REGRESSION (GLM — Class 10 & 11)
+# Dependent variable: loan_status (binary)
+# Key predictor of interest: loan_int_rate
+# Controls: borrower & loan characteristics
+
+logit_model <- glm(
+  loan_status ~ loan_int_rate +         # Key predictor of interest
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data   = train,
+  family = binomial(link = "logit")     # logit link for binary outcome
+)
+
+# Full summary: coefficients, p-values, AIC (Class 11)
+summary(logit_model)
+
+# Coefficient Interpretation (Class 10)
+# Extract odds ratios for easier interpretation
+odds_ratios <- exp(coef(logit_model))
+ci          <- exp(confint(logit_model))
+logit_results <- data.frame(
+  OddsRatio = round(odds_ratios, 4),
+  CI_Lower  = round(ci[, 1], 4),
+  CI_Upper  = round(ci[, 2], 4)
+)
+print(logit_results)
+
+cat("\n--- Key Interpretation for loan_int_rate ---\n")
+cat(sprintf(
+  "Odds Ratio = %.4f: A 1%% increase in interest rate multiplies the\n  odds of default by %.4f, holding all else constant.\n",
+  odds_ratios["loan_int_rate"], odds_ratios["loan_int_rate"]
+))
+
+# McFadden R² (Class 11 pseudo-R²)
+null_model   <- glm(loan_status ~ 1, data = train, family = binomial)
+mcfadden_r2  <- 1 - (logLik(logit_model) / logLik(null_model))
+cat(sprintf("\nMcFadden R² = %.4f\n", mcfadden_r2))
+
+# Predictions on Test Set
+logit_probs  <- predict(logit_model, newdata = test, type = "response")
+logit_preds  <- ifelse(logit_probs >= 0.5, 1, 0)
+logit_preds  <- as.factor(logit_preds)
+
+# Confusion Matrix (Class 11)
+cm_logit <- confusionMatrix(logit_preds, test$loan_status, positive = "1")
+print(cm_logit)
+
+# ROC-AUC (Class 11)
+roc_logit <- roc(response  = as.numeric(test$loan_status) - 1,
+                 predictor = logit_probs)
+plot(roc_logit,
+     main = "ROC Curve — Logistic Regression",
+     col  = "#3B8BD4",
+     lwd  = 2)
+cat(sprintf("\nLogistic Regression AUC = %.4f\n", auc(roc_logit)))
+```
+
+# Step 4: Model 2- Decision Tree (Single, Pruned)
+```{r}
+# MODEL 2: CLASSIFICATION DECISION TREE (Class 12)
+# rpart uses Gini impurity / entropy for splits
+# Alpha (cp) controls pruning — use cross-validation to select
+# Fit a full tree first
+tree_full <- rpart(
+  loan_status ~ loan_int_rate +
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data   = train,
+  method = "class",                # classification tree (Class 12)
+  control = rpart.control(cp = 0)  # start unpruned
+)
+
+# Cross-Validation to select optimal cp (alpha)
+# (Class 12: use CV to tune the complexity parameter)
+printcp(tree_full)    # Table of cp vs. cross-validated error
+plotcp(tree_full)     # Visual: pick cp at the elbow/minimum
+
+# Select the cp that minimizes cross-validated error
+best_cp <- tree_full$cptable[which.min(tree_full$cptable[, "xerror"]), "CP"]
+cat(sprintf("\nOptimal cp (alpha) = %.6f\n", best_cp))
+
+# Prune the tree
+tree_pruned <- prune(tree_full, cp = best_cp)
+
+# Visualize the Pruned Tree (Class 12: rpart.plot)
+rpart.plot(
+  tree_pruned,
+  type   = 4,
+  extra  = 104,
+  fallen.leaves = TRUE,
+  main   = "Pruned Classification Tree — Loan Default"
+)
+
+# Variable Importance (Class 12)
+var_imp_tree <- tree_pruned$variable.importance
+sort(var_imp_tree, decreasing = TRUE)
+
+# Bar plot of variable importance
+barplot(
+  sort(var_imp_tree, decreasing = TRUE),
+  las  = 2,
+  col  = "#1D9E75",
+  main = "Variable Importance — Decision Tree",
+  ylab = "Importance"
+)
+
+# Predictions on Test Set
+tree_probs <- predict(tree_pruned, newdata = test, type = "prob")[, 2]
+tree_preds <- predict(tree_pruned, newdata = test, type = "class")
+
+# Confusion Matrix (Class 11/12)
+cm_tree <- confusionMatrix(tree_preds, test$loan_status, positive = "1")
+print(cm_tree)
+
+# ROC-AUC
+roc_tree <- roc(response  = as.numeric(test$loan_status) - 1,
+                predictor = tree_probs)
+plot(roc_tree,
+     main = "ROC Curve — Decision Tree",
+     col  = "#1D9E75",
+     lwd  = 2)
+cat(sprintf("\nDecision Tree AUC = %.4f\n", auc(roc_tree)))
+```
+
+# Step 5: Model 3 - Bagging & Random Forest
+```{r}
+# MODEL 3A: BAGGING (Class 12)
+# Bagging = Random Forest with mtry = total number of predictors
+
+n_predictors <- 11   # total number of predictors in the model
+
+set.seed(42)
+bag_model <- randomForest(
+  loan_status ~ loan_int_rate +
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data       = train,
+  ntree      = 500,           # number of bootstrap trees (Class 12)
+  mtry       = n_predictors,  # Bagging: use ALL predictors at each split
+  importance = TRUE
+)
+
+print(bag_model)
+
+# Variable Importance (Class 12)
+varImpPlot(bag_model,
+           main = "Variable Importance — Bagging",
+           col  = "#534AB7")
+
+# Predictions on Test Set
+bag_probs <- predict(bag_model, newdata = test, type = "prob")[, 2]
+bag_preds <- predict(bag_model, newdata = test, type = "class")
+
+# Confusion Matrix
+cm_bag <- confusionMatrix(bag_preds, test$loan_status, positive = "1")
+print(cm_bag)
+
+# ROC-AUC
+roc_bag <- roc(response  = as.numeric(test$loan_status) - 1,
+               predictor = bag_probs)
+cat(sprintf("\nBagging AUC = %.4f\n", auc(roc_bag)))
+
+# MODEL 3B: RANDOM FOREST (Class 12)
+# Feature bagging: at each split, only a RANDOM SUBSET of
+# predictors is considered — default mtry = sqrt(p) for classification
+# This decorrelates the trees → lower variance than bagging
+
+set.seed(42)
+rf_model <- randomForest(
+  loan_status ~ loan_int_rate +
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data       = train,
+  ntree      = 500,
+  mtry       = floor(sqrt(n_predictors)),  # RF default: sqrt(p) ≈ 3
+  importance = TRUE
+)
+
+print(rf_model)
+
+# OOB (Out-of-Bag) error rate — built-in cross-validation estimate (Class 12)
+plot(rf_model, main = "OOB Error Rate vs. Number of Trees — Random Forest")
+
+# Variable Importance
+# MeanDecreaseAccuracy: how much accuracy drops if variable is permuted
+# MeanDecreaseGini: total decrease in node impurity (Gini)
+varImpPlot(rf_model,
+           main = "Variable Importance — Random Forest",
+           col  = "#534AB7")
+
+importance(rf_model)   # Print numeric importance values
+
+# Predictions on Test Set
+rf_probs <- predict(rf_model, newdata = test, type = "prob")[, 2]
+rf_preds <- predict(rf_model, newdata = test, type = "class")
+
+# Confusion Matrix
+cm_rf <- confusionMatrix(rf_preds, test$loan_status, positive = "1")
+print(cm_rf)
+
+# ROC-AUC
+roc_rf <- roc(response  = as.numeric(test$loan_status) - 1,
+              predictor = rf_probs)
+cat(sprintf("\nRandom Forest AUC = %.4f\n", auc(roc_rf)))
+```
+
+# Step 6 - Model Comparison & Answer to SMART Question
+```{r}
+# MODEL COMPARISON
+# (Class 11/12: compare all models using shared metrics)
+
+# Overlay all three ROC curves on one plot
+plot(roc_logit, col = "#3B8BD4", lwd = 2,
+     main = "ROC Curve Comparison — All Models")
+plot(roc_tree,  col = "#1D9E75", lwd = 2, add = TRUE)
+plot(roc_bag,   col = "#E24B4A", lwd = 2, lty = 2, add = TRUE)
+plot(roc_rf,    col = "#534AB7", lwd = 2, add = TRUE)
+abline(a = 0, b = 1, col = "gray60", lty = 3)
+legend("bottomright",
+       legend = c(
+         paste0("Logistic Reg  AUC = ", round(auc(roc_logit), 3)),
+         paste0("Decision Tree AUC = ", round(auc(roc_tree),  3)),
+         paste0("Bagging       AUC = ", round(auc(roc_bag),   3)),
+         paste0("Random Forest AUC = ", round(auc(roc_rf),    3))
+       ),
+       col = c("#3B8BD4", "#1D9E75", "#E24B4A", "#534AB7"),
+       lwd = 2, lty = c(1,1,2,1), cex = 0.85)
+
+# Summary comparison table
+comparison_df <- data.frame(
+  Model    = c("Logistic Regression", "Decision Tree", "Bagging", "Random Forest"),
+  AUC      = round(c(auc(roc_logit), auc(roc_tree), auc(roc_bag), auc(roc_rf)), 4),
+  Accuracy = round(c(
+    cm_logit$overall["Accuracy"],
+    cm_tree$overall["Accuracy"],
+    cm_bag$overall["Accuracy"],
+    cm_rf$overall["Accuracy"]
+  ), 4),
+  Recall   = round(c(
+    cm_logit$byClass["Sensitivity"],
+    cm_tree$byClass["Sensitivity"],
+    cm_bag$byClass["Sensitivity"],
+    cm_rf$byClass["Sensitivity"]
+  ), 4)
+)
+
+print(comparison_df)
+
+# ============================================================
+# ANSWERING THE SMART QUESTION
+# ============================================================
+
+cat("\n====================================================\n")
+cat("SMART QUESTION ANSWER SUMMARY\n")
+cat("====================================================\n")
+
+# From logistic regression — is loan_int_rate significant after controls?
+logit_summary <- summary(logit_model)
+int_rate_pval <- logit_summary$coefficients["loan_int_rate", "Pr(>|z|)"]
+int_rate_or   <- exp(coef(logit_model)["loan_int_rate"])
+
+cat(sprintf(
+  "\nLogistic Regression:\n  loan_int_rate coefficient p-value = %.4e\n  Odds Ratio = %.4f\n",
+  int_rate_pval, int_rate_or
+))
+
+if (int_rate_pval < 0.05) {
+  cat("  CONCLUSION: Interest rate is a statistically significant predictor\n")
+  cat("  of default even after controlling for all other variables.\n")
+} else {
+  cat("  CONCLUSION: Interest rate is NOT statistically significant\n")
+  cat("  after controlling for all other variables.\n")
+}
+
+# From Random Forest — where does interest rate rank?
+cat("\nRandom Forest Variable Importance (MeanDecreaseAccuracy):\n")
+rf_imp <- importance(rf_model)[, "MeanDecreaseAccuracy"]
+print(sort(rf_imp, decreasing = TRUE))
+```
+
+
+
+
+
+
