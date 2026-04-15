@@ -1,0 +1,489 @@
+---
+title: "Project 2: Implementing Regression-Based and Classification Modeling Techniques"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F, message = F)
+options(scientific=T, digits = 3) 
+library(viridis) 
+library(dplyr)
+library(scales)
+library(tidyverse)
+library(pROC)
+```
+
+
+# Introduction
+
+This project analyzes a credit risk dataset containing more than 30,000 loan observations. The dataset includes detailed information on borrower demographics, financial capacity, credit history, and loan characteristics.
+
+Building on exploratory findings from Project 1, this project focuses on applying statistical modeling techniques to better understand and quantify the relationships between borrower characteristics and key lending outcomes.
+
+The primary objective is to apply regression-based, classification, and tree-based modeling approaches to address three SMART research questions that capture different dimensions of credit risk and lending behavior. These questions focus on pricing (interest rate determination), default prediction, and the relationship between loan pricing and realized default risk.
+
+
+The analysis integrates exploratory insights with formal statistical models to evaluate both explanatory relationships and predictive performance, while also assessing the strengths and limitations of the used models. In addition to regression-based approaches, tree-based methods are also applied to capture non-linear relationships and enhance model interpretation.
+
+
+
+# Background and Summary of Project 1
+
+In Project 1, we conducted an exploratory data analysis of the same credit risk dataset obtained from Kaggle. The goal was to identify key patterns in borrower behavior, default risk, and revenue generation.
+
+The analysis revealed that income and loan amount distributions are highly right-skewed, and that borrower characteristics such as income, employment length, loan intent, and credit history are strongly associated with both default risk and revenue outcomes. In particular, loan grade and income level were identified as major factors influencing default behavior.
+
+These findings motivate the current project, where we move from exploratory analysis to formal statistical modeling in order to quantify these relationships and assess their significance.
+
+
+# Data and Variables
+
+## Data Source
+
+This project uses the *credit_risk_dataset.csv* obtained from Kaggle. It includes 32,581 observations and 12 variables describing borrower attributes and loan outcomes.
+
+```{r}
+credit_risk_dataset_1 = read.csv("credit_risk_dataset.csv")
+nrow(credit_risk_dataset_1)
+ncol(credit_risk_dataset_1)
+```
+
+## Variable definitions  
+
+Variable | Definition  
+:-|:--  
+person_age | Age of the borrower  
+person_income | Annual income of the borrower  
+person_home_ownership | Home ownership status  
+person_emp_length | Length of employment (months)  
+loan_intent | Purpose of the loan  
+loan_grade | Credit grade assigned to the loan  
+loan_amnt | Loan amount  
+loan_int_rate | Annual interest rate (%)  
+loan_status | Loan outcome (1 = default, 0 = non-default)  
+loan_percent_income | Loan amount as a percentage of income  
+cb_person_default_on_file | Prior default history (Y/N)  
+cb_person_cred_hist_length | Length of credit history (years)
+
+
+
+# Data Cleaning & Feature Engineering
+
+## Data type corrections
+
+```{r}
+summary(credit_risk_dataset_1)
+```
+
+The summary output indicates that several categorical variables are incorrectly treated as numeric. These variables are converted to factors to ensure proper handling in statistical modeling:
+ - person_home_ownership
+ - loan_intent
+ - loan_grade
+ - cb_person_default_on_file
+ - loan_status
+
+``` {r}
+credit_risk_dataset_1$person_home_ownership = as.factor(credit_risk_dataset_1$person_home_ownership)
+credit_risk_dataset_1$loan_intent = as.factor(credit_risk_dataset_1$loan_intent)
+credit_risk_dataset_1$loan_grade = as.factor(credit_risk_dataset_1$loan_grade)
+credit_risk_dataset_1$loan_status = as.factor(credit_risk_dataset_1$loan_status)
+credit_risk_dataset_1$cb_person_default_on_file = as.factor(credit_risk_dataset_1$cb_person_default_on_file)
+summary(credit_risk_dataset_1)
+```
+
+## Handling missing values
+
+Missing values exist in key variables, particularly person_emp_length and loan_int_rate. Since loan_int_rate is a primary variable used in modeling, observations with missing values in these fields cannot be reliably included in the study. Taking into account the relatively large size of the dataset (over 30,000 observations), we adopt a complete-case analysis approach, where rows containing missing values are removed. This approach is appropriate in this context because it simplifies the analysis and is unlikely to significantly reduce statistical power.
+
+```{r}
+colSums(is.na(credit_risk_dataset_1))
+credit_risk_dataset_clean = na.omit(credit_risk_dataset_1)
+colSums(is.na(credit_risk_dataset_clean))
+nrow(credit_risk_dataset_clean)
+```
+
+The dataset is cleaned by removing observations with missing values and new dataframe - "credit_risk_dataset_clean" is created.
+
+Now we have 28,638 clean rows.
+
+The cleaned dataset is used for all subsequent exploratory analysis and modeling steps in this project.
+
+
+
+# SMART QUESTION 1: Do Borrower Characteristics Affect Interest Rate? 
+
+## Modeling Strategy
+
+This question is primarily an inference problem, as the goal is to determine how borrower characteristics are associated with loan interest rate and whether these relationships are statistically significant.
+
+To address this question, multiple linear regression is used with `loan_int_rate` as the response variable.
+
+Two regression models are considered:
+
+- The first model includes only borrower-related characteristics (demographic, financial, and credit history variables).
+- The second model extends the first by including `loan_grade`, which reflects the lender’s internal risk assessment.
+
+Comparing these models helps distinguish between direct borrower effects and the explanatory role of institutional risk classification.
+
+In addition, regression tree models are employed to capture potential non-linear relationships and interaction effects among predictors. Trees provide an interpretable, rule-based representation of how interest rates are determined and allow comparison between models with and without loan grade.
+
+The combined use of regression and tree-based methods provides both statistical inference and structural insight into interest rate determination.
+
+
+# Step 1
+
+## Correlation matrix for quantitative variables
+
+We compute a correlation matrix for the quantitative variables to identify which numeric borrower characteristics are most strongly associated with interest rate and to perform variable selection for the regression model.
+
+```{r}
+# Selecting numeric variables (including response)
+num_vars_q1 = credit_risk_dataset_clean[, c(
+  "loan_int_rate",
+  "person_age",
+  "person_income",
+  "person_emp_length",
+  "loan_amnt",
+  "loan_percent_income",
+  "cb_person_cred_hist_length"
+)]
+
+# Computing correlation matrix
+cor_matrix_q1 = cor(num_vars_q1, use = "complete.obs")
+
+cor_matrix_q1
+```
+
+### Correlation Matrix Interpretation
+
+The correlation matrix shows that the linear relationships between borrower characteristics and interest rate are generally weak. The strongest positive associations with interest rate are observed for loan amount (0.1459) and loan percent income (0.1235). Most borrower characteristics, such as age, income, employment length, and credit history length, exhibit near-zero correlation with interest rate.
+
+This suggests that borrower characteristics alone may have limited direct linear association with interest rate, and that additional variables-such as loan grade may play a more important role in explaining variation in interest rates.
+
+
+# Step 2
+
+## Scatter Plots for Quantitative Variables
+
+We create scatter plots to visually examine the relationships between interest rate and quantitative borrower characteristics, and to assess whether these relationships appear approximately linear.
+
+```{r}
+pairs(num_vars_q1)
+```
+
+### Scatter Plot Interpretation
+
+The scatter plots confirm that the relationships between interest rate and the quantitative borrower characteristics are generally weak and do not exhibit strong linear patterns. Most plots show a high degree of dispersion with no clear upward or downward trend.
+
+While loan amount and loan percent income display a slight positive pattern with interest rate, the relationships remain relatively weak. Overall, the visual analysis supports the findings from the correlation matrix, suggesting that borrower characteristics alone have limited explanatory power for interest rate in a linear framework.
+
+
+# Step 3
+
+## Boxplots for Categorical Borrower Characteristics
+
+We use boxplots to examine how interest rate varies across categorical borrower characteristics, allowing us to assess whether different groups are associated with different levels of interest rates.
+
+```{r}
+ggplot(credit_risk_dataset_clean, aes(x = person_home_ownership, y = loan_int_rate)) +
+  geom_boxplot()
+
+ggplot(credit_risk_dataset_clean, aes(x = loan_intent, y = loan_int_rate)) +
+  geom_boxplot()
+
+ggplot(credit_risk_dataset_clean, aes(x = cb_person_default_on_file, y = loan_int_rate)) +
+  geom_boxplot()
+```
+
+
+### Boxplot Interpretation
+
+The boxplots show that interest rates vary across categorical borrower characteristics, although the differences are generally moderate. Home ownership and loan intent exhibit some variation in median interest rates across groups, but the differences are not very pronounced.
+
+In contrast, prior default history (`cb_person_default_on_file`) shows a clear and substantial difference: borrowers with a prior default ("Y") tend to have significantly higher interest rates than those without ("N"). This suggests that default history is an important predictor of interest rate.
+
+
+
+# Step 4
+
+## Model 1: Borrower Characteristics Only
+
+We fit a multiple linear regression model using only borrower-related characteristics to evaluate their direct association with interest rate.
+
+```{r}
+model1_q1 = lm(
+              loan_int_rate ~ person_age + person_income + person_emp_length + person_home_ownership + loan_intent +
+              cb_person_cred_hist_length + cb_person_default_on_file,data = credit_risk_dataset_clean
+              )
+
+summary(model1_q1)
+```
+
+
+### Model 1 Interpretation
+
+The results show that several borrower characteristics are statistically significant predictors of interest rate. In particular, prior default history has a very strong positive effect (p-value < 2e-16) , indicating that borrowers with a previous default are charged substantially higher interest rates. Additionally, income, employment length, home ownership status, and credit history length also have significant, though smaller, effects on interest rate.
+
+However, some variables such as age and several loan intent categories are not statistically significant. Overall, the model explains about 26.3% of the variation in interest rates, suggesting that borrower characteristics alone provide moderate explanatory power.
+
+
+# Step 5
+
+## Model 2: Adding Loan Grade
+
+We extend Model 1 by including loan grade to examine how risk classification improves the explanation of interest rates.
+
+```{r}
+model2_q1 = lm(
+              loan_int_rate ~ person_age + person_income + person_emp_length + person_home_ownership + loan_intent +
+              cb_person_cred_hist_length + cb_person_default_on_file + loan_grade, data = credit_risk_dataset_clean
+              )
+
+summary(model2_q1)
+```
+
+### Model 2 Interpretation
+
+After adding loan grade to the model, the explanatory power increases dramatically, with R-squared rising to approximately 90.3%. Loan grade appears as the strongest predictor of interest rate in the model, with higher risk grades (B–G) associated with substantially higher interest rates compared to the reference category.
+
+Importantly, the effect of prior default becomes statistically insignificant after including loan grade, suggesting that this risk information is largely incorporated into the loan grading system. Similarly, several borrower characteristics become weaker or insignificant, indicating that much of their influence is incorporated into the loan grading system.
+
+Overall, this model demonstrates that loan grade is the primary driver of interest rate determination, and borrower characteristics play a secondary role once risk classification is accounted for.
+
+
+# Step 6
+
+## ANOVA Model Comparison
+
+We use an ANOVA test to formally compare Model 1 and Model 2 and determine whether adding loan grade significantly improves the model.
+
+
+```{r}
+anova(model1_q1, model2_q1)
+```
+
+### ANOVA Model Comparison Interpretation
+
+The ANOVA results show that adding loan grade to the model leads to a highly significant improvement in model fit (F = 31485, p < 2e-16). The large reduction in residual sum of squares indicates that loan grade explains a substantial portion of the variation in interest rates.
+
+Therefore, we reject the null hypothesis and conclude that Model 2 provides a significantly better fit than Model 1. This confirms that loan grade adds important explanatory power beyond borrower characteristics alone.
+
+
+# Step 7
+
+## Model Diagnostics
+
+We examine residual plots to assess model assumptions such as linearity, normality, and constant variance.
+
+```{r}
+par(mfrow = c(2,2))
+plot(model2_q1)
+```
+
+
+### Model Diagnostics Interpretation
+
+The Residuals vs Fitted plot shows no strong systematic pattern, suggesting that the linearity assumption is reasonably satisfied. The Scale-Location plot indicates that the spread of residuals is relatively consistent, although there is slight heteroscedasticity at higher fitted values.
+
+The Q-Q plot reveals some deviation from normality in the tails, indicating that the residuals are not perfectly normally distributed. However, given the large sample size, this deviation is not a major concern.
+
+The Residuals vs Leverage plot shows a few observations with higher leverage, but none appear to have an excessively strong influence on the model.
+
+Overall, the diagnostic plots suggest that the model assumptions are reasonably satisfied, and the model provides a reliable fit to the data.
+
+
+# Step 8
+
+## Visualization of Interest Rate by Loan Grade
+
+We visualize the relationship between loan grade and interest rate to illustrate how risk classification affects pricing.
+
+```{r}
+ggplot(credit_risk_dataset_clean, aes(x = loan_grade, y = loan_int_rate)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Interest Rate Distribution by Loan Grade",
+    x = "Loan Grade",
+    y = "Interest Rate"
+    ) +
+  theme_minimal()
+```
+
+### Visualization Interpretation
+
+The boxplot clearly shows that interest rates increase consistently across loan grades from A to G. Higher risk grades are associated with higher median interest rates and wider variability. This visual evidence strongly supports the regression results, confirming that loan grade is the primary determinant of interest rates.
+
+
+# Step 9
+
+## Interest Rate Prediction Tool
+
+To demonstrate the practical application of the fitted linear regression model, we construct a simple prediction tool that estimates the expected interest rate for a new borrower based on their characteristics.
+
+```{r}
+# Example new borrower
+new_borrower_q1 = data.frame(
+  person_age = 30,
+  person_income = 45000,
+  person_emp_length = 5,
+  person_home_ownership = factor("RENT", levels = levels(credit_risk_dataset_clean$person_home_ownership)),
+  loan_intent = factor("MEDICAL", levels = levels(credit_risk_dataset_clean$loan_intent)),
+  cb_person_cred_hist_length = 6,
+  cb_person_default_on_file = factor("N", levels = levels(credit_risk_dataset_clean$cb_person_default_on_file)),
+  loan_grade = factor("C", levels = levels(credit_risk_dataset_clean$loan_grade))
+)
+
+# Predicted interest rate
+predicted_rate_q1 = predict(model2_q1, newdata = new_borrower_q1)[1]
+
+# Clean output
+cat("Predicted Interest Rate:", round(predicted_rate_q1, 3), "\n")
+```
+
+### Prediction Tool Interpretation
+
+The fitted linear regression model can be used as a practical prediction tool for estimating the interest rate assigned to a new borrower. By entering borrower demographic, financial, credit-history, and loan-grade information into the model, we obtain a predicted interest rate based on the relationships learned from the data.
+
+In the illustrative example, the model generates a predicted interest rate for a borrower with specified characteristics. This demonstrates how the regression model can be translated into a decision-support tool for pricing loans in a lending environment.
+
+Although the tool provides a useful estimate, it should be interpreted as a statistical prediction rather than an exact pricing rule, since real-world lending decisions may also incorporate additional institutional, regulatory, and market considerations.
+
+
+# Step 10
+
+## Regression Tree Models
+
+## With Loan Grade
+
+To complement the linear regression analysis, we implement a regression tree model including loan grade along with borrower characteristics. Unlike linear regression, which assumes a linear relationship between predictors and the response variable, regression trees capture non-linear patterns and interaction effects through a hierarchical structure of decision rules.
+
+Including loan grade in the tree allows us to assess whether the tree-based method confirms the dominant role of risk classification observed in the regression model. In particular, this approach helps determine whether loan grade alone is sufficient to explain most of the variation in interest rates, or whether additional borrower characteristics contribute meaningful information.
+
+By comparing the structure of the regression tree with the results from the linear model, we gain further insight into how interest rates are determined in a rule-based pricing framework.
+
+This result is consistent with the regression findings and suggests that the observed high explanatory power may partly reflect the recovery of an internal pricing rule rather than an entirely independent borrower-level relationship.
+
+
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+# Fit regression tree
+tree_q1 = rpart(
+  loan_int_rate ~ person_age + person_income + person_emp_length +
+  person_home_ownership + loan_intent +
+  cb_person_cred_hist_length + cb_person_default_on_file + loan_grade,
+  data = credit_risk_dataset_clean,
+  method = "anova"
+)
+
+# Plot tree
+rpart.plot(tree_q1)
+```
+
+
+### Interpretation 
+
+The regression tree demonstrates a highly structured and hierarchical relationship between loan grade and interest rates. The initial and most influential split occurs on loan grade A, indicating that this variable is the primary determinant of interest rate variation. Subsequent splits continue exclusively across loan grade categories (B, C, and D), forming a sequential risk-based structure.
+
+As loan grade deteriorates from A to D, the predicted interest rate increases consistently, with grade A loans exhibiting the lowest average interest rate (approximately 7.3%), and lower grades reaching substantially higher levels (up to approximately 17%).
+
+Importantly, no additional borrower characteristics appear in the tree, indicating that once loan grade is known, other variables do not provide additional explanatory power. This suggests that loan grade functions as a comprehensive summary of borrower risk and directly drives pricing decisions.
+
+Overall, the tree reveals a rule-based pricing mechanism, where interest rates are primarily determined by categorical risk classification rather than individual borrower attributes.
+
+
+## Without Loan Grade
+
+
+To better understand the underlying role of borrower characteristics in determining interest rates, we construct a second regression tree that excludes loan grade. Since loan grade represents the lender’s internal risk classification, removing it allows us to examine how interest rates are explained directly by borrower demographic, financial, and credit-related variables.
+
+This approach helps reveal whether fundamental borrower characteristics—such as prior default history, income, and home ownership—can independently explain variation in interest rates when the summary risk measure is not available.
+
+Comparing this tree with the model that includes loan grade provides valuable insight into the extent to which loan grade encapsulates borrower risk and replaces the need for individual predictors in determining loan pricing.
+
+
+
+```{r}
+tree_q1_no_grade = rpart(
+  loan_int_rate ~ person_age + person_income + person_emp_length +
+  person_home_ownership + loan_intent +
+  cb_person_cred_hist_length + cb_person_default_on_file,
+  data = credit_risk_dataset_clean,
+  method = "anova"
+)
+
+rpart.plot(tree_q1_no_grade)
+```
+
+### Interpretation
+
+The regression tree excluding loan grade reveals a more nuanced and behavior-driven structure of interest rate determination. The first and most important split occurs on prior default status (cb_person_default_on_file), indicating that credit history is the dominant factor influencing interest rates when the grading system is not considered.
+
+Borrowers with a history of default are associated with significantly higher interest rates (approximately 15%), reflecting increased perceived risk. Among borrowers without prior defaults, the next important factor is home ownership status. Individuals who own or have a mortgage tend to receive lower interest rates (approximately 9.9%), while those without stable housing arrangements face higher rates (approximately 11%).
+
+This structure suggests that, in the absence of a formal grading system, lenders rely on key financial stability indicators such as repayment history and asset ownership to assess risk and determine pricing.
+
+Overall, the tree highlights the underlying borrower-level drivers of interest rates and demonstrates how financial institutions may construct risk-based pricing rules from fundamental characteristics when summary risk measures are not used.
+
+
+# Step 11
+
+## Final Conclusion for smart question 1
+
+This analysis investigated whether borrower characteristics influence loan interest rates using multiple linear regression, complemented by regression tree models to capture potential non-linear relationships.
+
+The regression results indicate that borrower attributes such as income, employment length, home ownership, and prior default history have statistically significant effects on interest rates when considered independently. However, their overall explanatory power remains moderate.
+
+The inclusion of loan grade in the extended model led to a substantial improvement in model performance, with the R-squared increasing to over 90%. Loan grade emerged as the dominant predictor of interest rates, indicating that risk classification plays a central role in pricing decisions. The ANOVA results confirmed that this improvement is highly statistically significant, demonstrating that loan grade provides critical explanatory information beyond borrower characteristics alone.
+
+The regression tree analysis provides additional insight into the structure of interest rate determination. When loan grade is included, the tree relies almost exclusively on this variable, producing a clear hierarchical structure in which interest rates increase systematically across risk grades. This suggests that loan grade effectively encapsulates the relevant borrower risk information used in pricing.
+
+In contrast, when loan grade is excluded, the tree reveals the underlying borrower-level drivers of interest rates. Prior default history and home ownership emerge as key determinants, indicating that lenders rely on fundamental indicators of financial stability when a formal grading system is not available.
+
+Together, these findings highlight that interest rate determination operates through a structured, rule-based mechanism in which borrower characteristics influence pricing indirectly through institutional risk classification systems.
+
+It is important to note that loan grade is likely constructed by financial institutions using many of the same borrower characteristics included in the model. Therefore, the high explanatory power observed in the extended model may partly reflect the recovery of the bank’s internal pricing rule rather than a purely independent causal relationship. In this sense, the model may be capturing a constructed risk-based pricing mechanism rather than uncovering only natural relationships between borrower characteristics and interest rates.
+
+Additionally, the dataset does not include time-related or macroeconomic variables, which are known to influence interest rates. As a result, the model may not fully capture external market conditions affecting loan pricing.
+
+Overall, the combined use of regression and tree-based methods provides a comprehensive understanding of interest rate determination, balancing interpretability, predictive performance, and economic insight.
+
+
+Average Interest Rate by Loan Grade (bar chart)
+
+
+```{r}
+credit_risk_dataset_clean %>%
+  group_by(loan_grade) %>%
+  summarise(avg_rate = mean(loan_int_rate)) %>%
+  ggplot(aes(x = loan_grade, y = avg_rate, fill = loan_grade)) +
+  geom_col() +
+  geom_text(aes(label = round(avg_rate, 1)), 
+            vjust = -0.5, size = 5, fontface = "bold") +
+  labs(
+    title = "Average Interest Rate by Loan Grade",
+    x = "Loan Grade",
+    y = "Average Interest Rate (%)"
+  ) +
+  ylim(0, max(credit_risk_dataset_clean$loan_int_rate) + 3) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12)
+  ) +
+  guides(fill = "none")
+```
+
