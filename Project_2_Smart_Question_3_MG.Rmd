@@ -1,9 +1,19 @@
 ---
 title: "Project_2_SMART_Question_3"
 author: "Maurice Goode"
-date: "2026-04-12"
-output: html_document
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: show
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
 ---
+
 
 # Project 2 - SMART Question 3
 
@@ -20,7 +30,7 @@ library(dplyr)
 df <- read.csv("credit_risk_dataset.csv")
 ```
 
-# Step 1: Data Prepration
+# Step 1: Data Preparation
 ```{r}
 # Load Libraries
 library(ggplot2)
@@ -64,6 +74,8 @@ ggplot(df, aes(x = loan_status, y = loan_int_rate, fill = loan_status)) +
   theme_minimal()
 ```
 
+A quick EDA was performed to convert the appropriate fields to be factors. Next we removed rows that were missing values. Lastly, a boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower average interest rate vs. default borrowers.
+
 # Step 2: Train/Test Split (80/20)
 ```{r}
 
@@ -81,6 +93,8 @@ cat("Test rows    :", nrow(test),  "\n")
 cat("Default rate (train):", round(mean(train$loan_status == 1), 3), "\n")
 cat("Default rate (test) :", round(mean(test$loan_status  == 1), 3), "\n")
 ```
+
+For my training and test sets we used the standard 80/20 split. The average loan status when the borrower defaulted is our method of calculations. For the training set, that was 21.6% and for the test set is was 22.1%. 
 
 # Step 3: Model 1- Logistic Regression (MLR with logit link)
 ```{r}
@@ -148,6 +162,8 @@ plot(roc_logit,
      lwd  = 2)
 cat(sprintf("\nLogistic Regression AUC = %.4f\n", auc(roc_logit)))
 ```
+
+To adequately answer this SMART Question, we used three models to analyze the data thoroughly We chose a logistic regression, a decision tree, and a random forest. Most of the columns were chosen as key predictors. As expected, `age`, `income`, `cb_person_default_on_file`, and `cb_person_cred_hist_length` were a few fields that had a positive p-value.  
 
 # Step 4: Model 2- Decision Tree (Single, Pruned)
 ```{r}
