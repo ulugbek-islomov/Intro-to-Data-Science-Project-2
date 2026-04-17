@@ -246,178 +246,71 @@ plot(roc_tree,
 cat(sprintf("\nDecision Tree AUC = %.4f\n", auc(roc_tree)))
 ```
 
-# Step 5: Model 3 - Bagging & Random Forest
+# Step 5: Model 3 - Random Forest
 ```{r}
-# MODEL 3A: BAGGING (Class 12)
-# Bagging = Random Forest with mtry = total number of predictors
-
-n_predictors <- 11   # total number of predictors in the model
-
+# Building the Random Forest based on the full predictor set 
+# (Random Forest internally handles feature selection and interactions)
+# Building the Random Forest using the 'train' dataset
 set.seed(42)
-bag_model <- randomForest(
-  loan_status ~ loan_int_rate +
-    person_age +
-    person_income +
-    person_home_ownership +
-    person_emp_length +
-    loan_amnt +
-    loan_intent +
-    loan_grade +
-    loan_percent_income +
-    cb_person_default_on_file +
-    cb_person_cred_hist_length,
-  data       = train,
-  ntree      = 500,           # number of bootstrap trees (Class 12)
-  mtry       = n_predictors,  # Bagging: use ALL predictors at each split
-  importance = TRUE
-)
+rf_model <- randomForest(loan_status ~ ., 
+                         data = train, 
+                         ntree = 500, 
+                         importance = TRUE)
 
-print(bag_model)
+# Visualizing which variables drive the model most
+varImpPlot(rf_model, main = "Random Forest Variable Importance")
 
-# Variable Importance (Class 12)
-varImpPlot(bag_model,
-           main = "Variable Importance — Bagging",
-           col  = "#534AB7")
+# Generating probability predictions on the 'test' dataset
+rf_probs <- predict(rf_model, test, type = "prob")[,2]
+rf_preds <- ifelse(rf_probs > 0.5, 1, 0)
 
-# Predictions on Test Set
-bag_probs <- predict(bag_model, newdata = test, type = "prob")[, 2]
-bag_preds <- predict(bag_model, newdata = test, type = "class")
-
-# Confusion Matrix
-cm_bag <- confusionMatrix(bag_preds, test$loan_status, positive = "1")
-print(cm_bag)
-
-# ROC-AUC
-roc_bag <- roc(response  = as.numeric(test$loan_status) - 1,
-               predictor = bag_probs)
-cat(sprintf("\nBagging AUC = %.4f\n", auc(roc_bag)))
-
-# MODEL 3B: RANDOM FOREST (Class 12)
-# Feature bagging: at each split, only a RANDOM SUBSET of
-# predictors is considered — default mtry = sqrt(p) for classification
-# This decorrelates the trees → lower variance than bagging
-
-set.seed(42)
-rf_model <- randomForest(
-  loan_status ~ loan_int_rate +
-    person_age +
-    person_income +
-    person_home_ownership +
-    person_emp_length +
-    loan_amnt +
-    loan_intent +
-    loan_grade +
-    loan_percent_income +
-    cb_person_default_on_file +
-    cb_person_cred_hist_length,
-  data       = train,
-  ntree      = 500,
-  mtry       = floor(sqrt(n_predictors)),  # RF default: sqrt(p) ≈ 3
-  importance = TRUE
-)
-
-print(rf_model)
-
-# OOB (Out-of-Bag) error rate — built-in cross-validation estimate (Class 12)
-plot(rf_model, main = "OOB Error Rate vs. Number of Trees — Random Forest")
-
-# Variable Importance
-# MeanDecreaseAccuracy: how much accuracy drops if variable is permuted
-# MeanDecreaseGini: total decrease in node impurity (Gini)
-varImpPlot(rf_model,
-           main = "Variable Importance — Random Forest",
-           col  = "#534AB7")
-
-importance(rf_model)   # Print numeric importance values
-
-# Predictions on Test Set
-rf_probs <- predict(rf_model, newdata = test, type = "prob")[, 2]
-rf_preds <- predict(rf_model, newdata = test, type = "class")
-
-# Confusion Matrix
-cm_rf <- confusionMatrix(rf_preds, test$loan_status, positive = "1")
+# Confusion Matrix for Random Forest
+cm_rf <- confusionMatrix(as.factor(rf_preds), as.factor(test$loan_status), positive = "1")
 print(cm_rf)
-
-# ROC-AUC
-roc_rf <- roc(response  = as.numeric(test$loan_status) - 1,
-              predictor = rf_probs)
-cat(sprintf("\nRandom Forest AUC = %.4f\n", auc(roc_rf)))
 ```
+
 
 # Step 6 - Model Comparison & Answer to SMART Question
 ```{r}
-# MODEL COMPARISON
-# (Class 11/12: compare all models using shared metrics)
+# ============================================================
+# ROC CURVE COMPARISON
+# ============================================================
 
-# Overlay all three ROC curves on one plot
-plot(roc_logit, col = "#3B8BD4", lwd = 2,
-     main = "ROC Curve Comparison — All Models")
-plot(roc_tree,  col = "#1D9E75", lwd = 2, add = TRUE)
-plot(roc_bag,   col = "#E24B4A", lwd = 2, lty = 2, add = TRUE)
-plot(roc_rf,    col = "#534AB7", lwd = 2, add = TRUE)
-abline(a = 0, b = 1, col = "gray60", lty = 3)
-legend("bottomright",
-       legend = c(
-         paste0("Logistic Reg  AUC = ", round(auc(roc_logit), 3)),
-         paste0("Decision Tree AUC = ", round(auc(roc_tree),  3)),
-         paste0("Bagging       AUC = ", round(auc(roc_bag),   3)),
-         paste0("Random Forest AUC = ", round(auc(roc_rf),    3))
-       ),
-       col = c("#3B8BD4", "#1D9E75", "#E24B4A", "#534AB7"),
-       lwd = 2, lty = c(1,1,2,1), cex = 0.85)
+# 1. Get probabilities for existing models on the test set
+# (Assuming logit_model and pruned_tree were also trained on 'train')
+logit_probs <- predict(logit_model, test, type = "response")
+tree_probs  <- predict(tree_pruned, test, type = "prob")[,2]
 
-# Summary comparison table
-comparison_df <- data.frame(
-  Model    = c("Logistic Regression", "Decision Tree", "Bagging", "Random Forest"),
-  AUC      = round(c(auc(roc_logit), auc(roc_tree), auc(roc_bag), auc(roc_rf)), 4),
-  Accuracy = round(c(
-    cm_logit$overall["Accuracy"],
-    cm_tree$overall["Accuracy"],
-    cm_bag$overall["Accuracy"],
-    cm_rf$overall["Accuracy"]
-  ), 4),
-  Recall   = round(c(
-    cm_logit$byClass["Sensitivity"],
-    cm_tree$byClass["Sensitivity"],
-    cm_bag$byClass["Sensitivity"],
-    cm_rf$byClass["Sensitivity"]
-  ), 4)
+# 2. Calculate ROC objects
+roc_logit <- roc(test$loan_status, logit_probs)
+roc_tree  <- roc(test$loan_status, tree_probs)
+roc_rf    <- roc(test$loan_status, rf_probs)
+
+# 3. Plot the combined ROC Curve
+plot(roc_logit, col = "blue", main = "ROC Curve Comparison for Loan Default", lwd = 2)
+plot(roc_tree, add = TRUE, col = "orange", lwd = 2)
+plot(roc_rf, add = TRUE, col = "#009E73", lwd = 2)
+
+# Add Legend
+legend("bottomright", 
+       legend = c(paste("Logistic Regression (AUC =", round(auc(roc_logit), 3), ")"),
+                  paste("Pruned Decision Tree (AUC =", round(auc(roc_tree), 3), ")"),
+                  paste("Random Forest (AUC =", round(auc(roc_rf), 3), ")")),
+       col = c("blue", "orange", "#009E73"), 
+       lwd = 2)
+
+# ============================================================
+# FINAL PERFORMANCE SUMMARY
+# ============================================================
+comparison_metrics <- data.frame(
+  Model = c("Logistic Regression", "Pruned Tree", "Random Forest"),
+  AUC = c(auc(roc_logit), auc(roc_tree), auc(roc_rf)),
+  Accuracy = c(cm_logit$overall["Accuracy"], 
+               cm_tree$overall["Accuracy"], 
+               cm_rf$overall["Accuracy"])
 )
-
-print(comparison_df)
-
-# ============================================================
-# ANSWERING THE SMART QUESTION
-# ============================================================
-
-cat("\n====================================================\n")
-cat("SMART QUESTION ANSWER SUMMARY\n")
-cat("====================================================\n")
-
-# From logistic regression — is loan_int_rate significant after controls?
-logit_summary <- summary(logit_model)
-int_rate_pval <- logit_summary$coefficients["loan_int_rate", "Pr(>|z|)"]
-int_rate_or   <- exp(coef(logit_model)["loan_int_rate"])
-
-cat(sprintf(
-  "\nLogistic Regression:\n  loan_int_rate coefficient p-value = %.4e\n  Odds Ratio = %.4f\n",
-  int_rate_pval, int_rate_or
-))
-
-if (int_rate_pval < 0.05) {
-  cat("  CONCLUSION: Interest rate is a statistically significant predictor\n")
-  cat("  of default even after controlling for all other variables.\n")
-} else {
-  cat("  CONCLUSION: Interest rate is NOT statistically significant\n")
-  cat("  after controlling for all other variables.\n")
-}
-
-# From Random Forest — where does interest rate rank?
-cat("\nRandom Forest Variable Importance (MeanDecreaseAccuracy):\n")
-rf_imp <- importance(rf_model)[, "MeanDecreaseAccuracy"]
-print(sort(rf_imp, decreasing = TRUE))
+print(comparison_metrics)
 ```
-
 
 
 
