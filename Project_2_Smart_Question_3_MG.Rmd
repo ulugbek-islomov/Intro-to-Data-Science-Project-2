@@ -74,7 +74,7 @@ ggplot(df, aes(x = loan_status, y = loan_int_rate, fill = loan_status)) +
   theme_minimal()
 ```
 
-A quick EDA was performed to convert the appropriate fields to be factors. Next we removed rows that were missing values. Lastly, a boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower average interest rate vs. default borrowers.
+A quick EDA was performed to convert the appropriate fields to be factors. Next we removed rows that were missing values. After that we checked the overall count of non-default borrowers vs. default borrowers. An extraordinary amount of 78% are non-default borrowers. This is an imbalance that could skew the training data later in our analysis. A boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower median interest rate vs. default borrowers.
 
 # Step 2: Train/Test Split (80/20)
 ```{r}
@@ -94,7 +94,7 @@ cat("Default rate (train):", round(mean(train$loan_status == 1), 3), "\n")
 cat("Default rate (test) :", round(mean(test$loan_status  == 1), 3), "\n")
 ```
 
-For my training and test sets we used the standard 80/20 split. The average loan status when the borrower defaulted is our method of calculations. For the training set, that was 21.6% and for the test set is was 22.1%. 
+For our training and test sets we used the standard 80/20 split. To verify the split is representative, we compared the default rate in the training set (21.6%) to the test set (22.1%) 
 
 # Step 3: Model 1- Logistic Regression (MLR with logit link)
 ```{r}
@@ -163,7 +163,13 @@ plot(roc_logit,
 cat(sprintf("\nLogistic Regression AUC = %.4f\n", auc(roc_logit)))
 ```
 
-To adequately answer this SMART Question, we used three models to analyze the data thoroughly We chose a logistic regression, a decision tree, and a random forest. Most of the columns were chosen as key predictors. As expected, `age`, `income`, `cb_person_default_on_file`, and `cb_person_cred_hist_length` were a few fields that had a positive p-value.  
+To adequately answer this SMART Question, we used three models to analyze the data thoroughly We chose a logistic regression, a decision tree, and a random forest. Most of the columns were chosen as key predictors. Some variables that were not statistically significant are `age`, `income`, `cb_person_default_on_file`, and `cb_person_cred_hist_length.` Their p-values were above 0.5 Then we looked at the odds ratio. Variables with an odds ratio above 2 are: `person_home_ownershipRENT`, `loan_grade_D`, `loan_grade_E`, `loan_grade_F`, `loan_grade_G`, and `loan_percent_income`. None of the variables had a negative odds ratio.
+
+In general, below average loan grades and the debt-to-income ratio are key factors for loan underwriting. What stood out to use though was how high the odds ratio was for `loan_grade_G` and `loan_percent_income.` Respectfully, for every 1% increase in those variables there is a 507% and 617953% chance that a borrower will default on the loan.
+
+In regards to the interest rate, a 1% increase multiplies the odds of default by 1.0881, holding all else constant. The training data explains 36.3% of the variability in the model due to its McFadden R² value. The relationship is statistically significant at any conventional threshold.
+
+Switching gears to the Confusion Matrix. This logistic model has a moderate sensitivity of 54% but a high specificity of 95%. Translating to a balance of actual values and false values from a sensitivity side. On the other hand, the model is highly specific which is not a great sign. Finally, the AUC had a score of 85.93% which is good. However, one caveat that we noticed during EDA is that 78% of the borrowers are non-default. Additionally methodologies will be needed to draw a more concise conclusion. 
 
 # Step 4: Model 2- Decision Tree (Single, Pruned)
 ```{r}
