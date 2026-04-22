@@ -18,7 +18,9 @@ output:
 # Project 2 - SMART Question 3
 
 # Step 1: Data Preparation
-```{r}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
 # Load Libraries
 library(ggplot2)
 library(dplyr)
@@ -28,7 +30,7 @@ library(randomForest)   # Bagging & random forest (Class 12)
 library(pROC)           # ROC-AUC (Class 11)
 library(caret)          # Confusion matrix helper
 library(pdp)            
-library(gridExtra)      
+library(gridExtra)   
 
 # Load & Prepare Data
 df <- read.csv("credit_risk_dataset.csv")
@@ -251,7 +253,7 @@ plot(roc_tree,
 cat(sprintf("\nDecision Tree AUC = %.4f\n", auc(roc_tree)))
 ```
 # Step 5: Model 3 - Random Forest
-```{r}
+```{r rf_train, cache=TRUE, cache.extra=nrow(train)}
 # Building the Random Forest based on the full predictor set 
 # (Random Forest internally handles feature selection and interactions)
 # Building the Random Forest using the 'train' dataset
@@ -265,14 +267,6 @@ rf_model <- randomForest(loan_status ~ .,
 varImpPlot(rf_model, main = "Random Forest Variable Importance")
 
 # Partial Dependence Plot (PDP) Analysis
-
-# Required Libraries
-library(randomForest)   
-library(pdp)            
-library(ggplot2)        
-library(gridExtra)      
-library(dplyr)          
-
 
 # Univariate PDP — loan_int_rate only
 set.seed(42)
