@@ -4,7 +4,7 @@ author: "Maurice Goode"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    code_folding: show
+    code_folding: hide
     number_sections: false
     toc: yes
     toc_depth: 3
@@ -18,16 +18,17 @@ output:
 # Project 2 - SMART Question 3
 
 # Step 1: Data Preparation
-```{r setup, include=FALSE}
+```{r}
+#{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
 
 # Load Libraries
 library(ggplot2)
 library(dplyr)
-library(rpart)          # Decision tree (Class 12)
+library(rpart)          # Decision tree
 library(rpart.plot)     # Tree visualization
-library(randomForest)   # Bagging & random forest (Class 12)
-library(pROC)           # ROC-AUC (Class 11)
+library(randomForest)   # Bagging & random forest
+library(pROC)           # ROC-AUC 
 library(caret)          # Confusion matrix helper
 library(pdp)            
 library(gridExtra)   
@@ -35,7 +36,7 @@ library(gridExtra)
 # Load & Prepare Data
 df <- read.csv("credit_risk_dataset.csv")
 
-# Convert categorical variables to factors (as done in Project 1)
+# Convert categorical variables to factors
 df$person_home_ownership      <- as.factor(df$person_home_ownership)
 df$loan_intent                <- as.factor(df$loan_intent)
 df$loan_grade                 <- as.factor(df$loan_grade)
@@ -46,7 +47,7 @@ df <- na.omit(df)
 
 cat("Rows after NA removal:", nrow(df), "\n")   # expect ~28,638
 
-# Check class balance (important for classification — Class 11)
+# Check class balance
 table(df$loan_status)
 prop.table(table(df$loan_status))
 
@@ -65,7 +66,7 @@ ggplot(df, aes(x = loan_status, y = loan_int_rate, fill = loan_status)) +
   theme_minimal()
 ```
 
-A quick EDA was performed to convert the appropriate fields to be factors. Next we removed rows that were missing values. After that we checked the overall count of non-default borrowers vs. default borrowers. An extraordinary number of 78% are non-default borrowers. This is an imbalance that could skew the training data later in our analysis. A boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower median interest rate vs. default borrowers.
+A quick EDA was performed to convert the appropriate fields to be factors. Next, we removed rows that were missing values. After that we checked the overall count of non-default borrowers vs. default borrowers. An extraordinary number of 78% are non-default borrowers. This is an imbalance that could skew the training data later in our analysis. A boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower median interest rate vs. default borrowers.
 
 # Step 2: Train/Test Split (80/20)
 ```{r}
@@ -89,7 +90,7 @@ For our training and test sets we used the standard 80/20 split. To verify the s
 
 # Step 3: Model 1- Logistic Regression (MLR with logit link)
 ```{r}
-# MODEL 1: LOGISTIC REGRESSION (GLM — Class 10 & 11)
+# MODEL 1: LOGISTIC REGRESSION
 # Dependent variable: loan_status (binary)
 # Key predictor of interest: loan_int_rate
 # Controls: borrower & loan characteristics
@@ -110,10 +111,10 @@ logit_model <- glm(
   family = binomial(link = "logit")     # logit link for binary outcome
 )
 
-# Full summary: coefficients, p-values, AIC (Class 11)
+# Full summary: coefficients, p-values, AIC
 summary(logit_model)
 
-# Coefficient Interpretation (Class 10)
+# Coefficient Interpretation
 # Extract odds ratios for easier interpretation
 odds_ratios <- exp(coef(logit_model))
 ci          <- exp(confint(logit_model))
@@ -130,7 +131,7 @@ cat(sprintf(
   odds_ratios["loan_int_rate"], odds_ratios["loan_int_rate"]
 ))
 
-# McFadden R² (Class 11 pseudo-R²)
+# McFadden R²
 null_model   <- glm(loan_status ~ 1, data = train, family = binomial)
 mcfadden_r2  <- 1 - (logLik(logit_model) / logLik(null_model))
 cat(sprintf("\nMcFadden R² = %.4f\n", mcfadden_r2))
@@ -140,11 +141,11 @@ logit_probs  <- predict(logit_model, newdata = test, type = "response")
 logit_preds  <- ifelse(logit_probs >= 0.5, 1, 0)
 logit_preds  <- as.factor(logit_preds)
 
-# Confusion Matrix (Class 11)
+# Confusion Matrix
 cm_logit <- confusionMatrix(logit_preds, test$loan_status, positive = "1")
 print(cm_logit)
 
-# ROC-AUC (Class 11)
+# ROC-AUC
 roc_logit <- roc(response  = as.numeric(test$loan_status) - 1,
                  predictor = logit_probs)
 plot(roc_logit,
@@ -158,15 +159,13 @@ To adequately answer this SMART Question, we used three models to analyze the da
 
 In general, below average loan grades and the debt-to-income ratio are key factors for loan underwriting. What stood out to use though was how high the odds ratio was for `loan_grade_G` and `loan_percent_income.` Respectfully, for every 1% increase in those variables there is a 507% and 617953% chance that a borrower will default on the loan.
 
-In regards to the interest rate, a 1% increase multiplies the odds of default by 1.0881, holding all else constant. The training data explains 36.3% of the variability in the model due to its McFadden R² value. The relationship is statistically significant at any conventional threshold.
+Regarding the interest rate, a 1% increase multiplies the odds of default by 1.0881, holding all else constant. The training data explains 36.3% of the variability in the model due to its McFadden R² value. The relationship is statistically significant at any conventional threshold.
 
-Switching gears to the Confusion Matrix. This logistic model has a moderate sensitivity of 54% but a high specificity of 95%. Translating to a balance of actual values and false values from a sensitivity side. On the other hand, the model is highly specific which is not a great sign. Finally, the AUC had a score of 85.93% which is good. However, one caveat that we noticed during EDA is that 78% of the borrowers are non-default. Additionally methodologies will be needed to draw a more concise conclusion. 
+Switching gears to the Confusion Matrix. This logistic model has a moderate sensitivity of 54% but a high specificity of 95%. Translating to a balance of actual values and false values from a sensitivity side. On the other hand, the model is highly specific which is not a great sign. Finally, the AUC had a score of 85.93% which is good. However, one caveat that we noticed during EDA is that 78% of the borrowers are non-default. Additionally, methodologies will be needed to draw a more concise conclusion. 
 
 # Step 4: Model 2- Decision Tree (Single, Pruned)
 ```{r}
-# MODEL 2: CLASSIFICATION DECISION TREE (Class 12)
-# rpart uses Gini impurity / entropy for splits
-# Alpha (cp) controls pruning — use cross-validation to select
+# MODEL 2: CLASSIFICATION DECISION TREE
 # Fit a full tree first
 tree_full <- rpart(
   loan_status ~ loan_int_rate +
@@ -181,12 +180,11 @@ tree_full <- rpart(
     cb_person_default_on_file +
     cb_person_cred_hist_length,
   data   = train,
-  method = "class",                # classification tree (Class 12)
+  method = "class",                # classification tree
   control = rpart.control(cp = 0)  # start unpruned
 )
 
 # Cross-Validation to select optimal cp (alpha)
-# (Class 12: use CV to tune the complexity parameter)
 printcp(tree_full)    # Table of cp vs. cross-validated error
 plotcp(tree_full)     # Visual: pick cp at the elbow/minimum
 
@@ -218,7 +216,7 @@ rpart.plot(
   main  = "Zoomed View: Branch 2 Context"
 )
 
-# Variable Importance (Class 12)
+# Variable Importance
 var_imp_tree <- tree_pruned$variable.importance
 sort(var_imp_tree, decreasing = TRUE)
 
@@ -239,7 +237,7 @@ barplot(
 tree_probs <- predict(tree_pruned, newdata = test, type = "prob")[, 2]
 tree_preds <- predict(tree_pruned, newdata = test, type = "class")
 
-# Confusion Matrix (Class 11/12)
+# Confusion Matrix
 cm_tree <- confusionMatrix(tree_preds, test$loan_status, positive = "1")
 print(cm_tree)
 
@@ -252,15 +250,19 @@ plot(roc_tree,
      lwd  = 2)
 cat(sprintf("\nDecision Tree AUC = %.4f\n", auc(roc_tree)))
 ```
+Next, we transitioned to non-parametric models because they do not assume the shape of the relationship between the variables and can provide accurate readings when there is a large sample size. We chose a decision tree followed by a random forest. Again, we wanted to test the variable importance of loan_int_rate. In the bar chart, we see that it is the fourth most important variable. More important variables are expected because they align with standard underwriting practices. When applying for a loan the bank evaluates a person's credit history, income, debt-to-income ratio, etc. 
+
+The complexity of this tree was 0.000540 optimal complexity parameter. It was hard to visually read the tree. Instead, we zoomed in on one branch to get a closer look. Nothing of much importance can be derived from that branch. In the Confusion Matrix, the model's accuracy of 93.16% is higher than the 86.24% from the logistic regression. Although the decision tree does have a specificity of 99.55%. That is almost perfect, which could be because it is a single decision tree. Let's multiply it by creating a random forest.
+
+
 # Step 5: Model 3 - Random Forest
 ```{r rf_train, cache=TRUE, cache.extra=nrow(train)}
 # Building the Random Forest based on the full predictor set 
-# (Random Forest internally handles feature selection and interactions)
 # Building the Random Forest using the 'train' dataset
 set.seed(42)
 rf_model <- randomForest(loan_status ~ ., 
                          data = train, 
-                         ntree = 500, 
+                         ntree = 100, 
                          importance = TRUE)
 
 # Visualizing which variables drive the model most
@@ -385,13 +387,14 @@ rf_preds <- ifelse(rf_probs > 0.5, 1, 0)
 cm_rf <- confusionMatrix(as.factor(rf_preds), as.factor(test$loan_status), positive = "1")
 print(cm_rf)
 ```
+Using a random forest we can get a clearer analysis. Initially we chose 500 trees but required an extreme amount of compute power. So we shrunk it down to 100. The variable importance was our focus with this model. A dot plot was created to measure the variable's Mean Decrease Accuracy (MDA) and Mean Decrease Gini (MDG). Interestingly, the loan_int_rate had a low MDA but a high MDG. This is a rarity. This means that loan_int_rate when removed from the model does not decrease the model's ability to get the outcome. Despite that, it does has node purity and is a decent choice when making a classification for a tree. 
+
+This could mean that it might have a relationship with one or more variables. We tested its partial dependency. Two plots were generated. The first one shows that loan_int_rate does have a statistical significance on loan_default. Nonetheless, when cross-referencing it with loan grade that is where we found a relationship. As the loan grade decreased from grade A to G, then shape of the plot became flatter. Meaning the effect of loan_int_rate had less of an impact as the loan grade got worse. This makes sense because the Spearman correlation between these variables is 94.73%.
 
 
 # Step 6 - Model Comparison & Answer to SMART Question
 ```{r}
-# ============================================================
 # ROC CURVE COMPARISON
-# ============================================================
 
 # 1. Get probabilities for existing models on the test set
 # (Assuming logit_model and pruned_tree were also trained on 'train')
@@ -416,9 +419,7 @@ legend("bottomright",
        col = c("blue", "orange", "#009E73"), 
        lwd = 2)
 
-# ============================================================
 # FINAL PERFORMANCE SUMMARY
-# ============================================================
 comparison_metrics <- data.frame(
   Model = c("Logistic Regression", "Pruned Tree", "Random Forest"),
   AUC = c(auc(roc_logit), auc(roc_tree), auc(roc_rf)),
@@ -428,3 +429,7 @@ comparison_metrics <- data.frame(
 )
 print(comparison_metrics)
 ```
+All in all, the model's accuracy and AUC increased as we built each one. We can conclude that yes interest rate has an influence on loan default. One caveat is that it has a relationship with other variables like loan grade. Another note is that the data is unbalanced with 78% of borrowers being non-default. This could explain why the specificity for the decision tree and random forest were 99%.
+
+Next time we should balance out the data more to see if that would produce a different outcome. Maybe then the correlation between loan grade and interest rate would disappear.
+
