@@ -1,0 +1,260 @@
+---
+title: "Project 2: Predictive Modeling:- Logistic Regression for Loan Default Prediction"
+author: "Soumay Patidar"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r init, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+options(scipen = 999)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(pROC)
+```
+
+# Introduction
+
+**In this project, we aim to answer a practical question that matters a lot in the banking and finance industry: can we predict whether a borrower will default on their loan? To answer this, we built a predictive model using logistic regression. We chose logistic regression because our outcome variable, loan_status, is binary. A borrower either defaults, represented by 1, or does not default, represented by 0. Logistic regression is the standard and most interpretable method for this type of binary classification problem.**
+
+**Our analysis follows a clear step by step process. We first prepared and cleaned the data, then split it into training and testing sets, built the logistic regression model, made predictions on unseen data, evaluated the model using multiple performance metrics, and finally interpreted the results to understand which borrower characteristics are the biggest drivers of loan default risk.**
+
+**Key steps in this analysis:**
+
+**1. Prepare and clean the data**
+**2. Split data into training (70%) and testing (30%) sets**
+**3. Build a logistic regression model using the training data**
+**4. Make predictions on the test set**
+**5. Evaluate model performance using multiple metrics:**
+
+- **Accuracy: Overall percentage of correct predictions**
+- **Confusion Matrix: Breakdown of correct and incorrect predictions**
+- **Precision: Of predictions we made, how many were correct?**
+- **Recall: Of actual defaults, how many did we catch?**
+- **F1-Score: Balanced measure of precision and recall**
+- **ROC Curve and AUC: Model's ability to discriminate between defaults and non-defaults**
+
+**6. Interpret coefficients to identify which borrower characteristics drive default risk**
+
+# Data Preparation
+
+**Before building any model, we need to make sure the data is clean and in the right format. We started by loading the dataset called credit_risk_dataset.csv and examining its structure using the str() and head() functions. This helped us understand how many variables and rows we are working with and what data types each column has. We also used colSums(is.na()) to check how many missing values exist in each column.**
+
+```{r}
+credit_data <- read.csv("credit_risk_dataset.csv")
+str(credit_data)
+head(credit_data)
+colSums(is.na(credit_data))
+```
+
+## Convert Target Variable to Factor
+
+**The variable loan_status is our target variable. It tells us whether a loan defaulted or not. We converted it to a factor because R's logistic regression function requires the outcome to be categorical. Without this conversion, R would treat loan_status as a continuous number and try to fit a linear model instead of a classification model, which would give us completely wrong results.**
+
+```{r}
+credit_data$loan_status <- as.factor(credit_data$loan_status)
+```
+
+## Convert Categorical Variables to Factors
+
+**Several other variables in the dataset are also categorical in nature. Variables like home ownership type, loan intent, loan grade, and prior default history on file are not numbers but rather categories or labels. We converted all of these to factors as well. This is important because if we leave them as plain text or character strings, R will either ignore them or process them incorrectly during model training.**
+
+```{r}
+credit_data$person_home_ownership <- as.factor(credit_data$person_home_ownership)
+credit_data$loan_intent <- as.factor(credit_data$loan_intent)
+credit_data$loan_grade <- as.factor(credit_data$loan_grade)
+credit_data$cb_person_default_on_file <- as.factor(credit_data$cb_person_default_on_file)
+```
+
+## Remove Missing Values
+
+**We used the na.omit() function to remove all rows that contain any missing values. Missing values can cause errors during model training and can also introduce bias in our results. Since the number of missing rows in this dataset is relatively small compared to the total size of around 32,000 observations, removing them is a safe and straightforward approach that does not significantly affect our analysis.**
+
+```{r}
+credit_data <- na.omit(credit_data)
+```
+
+# Train-Test Split (70/30)
+
+**We divided the cleaned dataset into two parts. We used 70% of the data to train the model and the remaining 30% to test it. The training set is what the model learns from, and the test set is used to evaluate how well the model performs on data it has never seen before. This separation is critical because if we evaluated the model on the same data it trained on, we would get overly optimistic results that do not reflect real world performance.**
+
+**We used set.seed(123) to make the split reproducible, meaning every time we run the code we get the exact same split. We also used createDataPartition which ensures that both the training and testing sets have a similar proportion of defaults and non-defaults, so neither set is imbalanced.**
+
+```{r}
+set.seed(123)
+train_index <- createDataPartition(credit_data$loan_status, p = 0.7, list = FALSE)
+train_data <- credit_data[train_index, ]
+test_data  <- credit_data[-train_index, ]
+dim(train_data)
+dim(test_data)
+```
+
+# Logistic Regression Model
+
+**We built the logistic regression model using the glm() function with the family parameter set to binomial. This tells R that we are dealing with a binary outcome and that it should use the logistic function to estimate probabilities. The model was trained on the 70% training data.**
+
+**We included 8 predictor variables in the model: person_income, person_emp_length, person_home_ownership, loan_amnt, loan_int_rate, loan_percent_income, person_age, and cb_person_cred_hist_length. These variables represent a mix of the borrower's personal financial situation and the specific loan characteristics. After training, we used summary() to examine which variables are statistically significant and in which direction they influence the probability of default.**
+
+```{r}
+model_logit <- glm(loan_status ~ person_income + person_emp_length +
+                                 person_home_ownership +loan_amnt +
+                                 loan_int_rate +loan_percent_income +
+                                 person_age +cb_person_cred_hist_length,
+                   data = train_data, family = binomial)
+
+summary(model_logit)
+```
+
+# Model Evaluation
+
+**After building the model, we evaluated how well it performs on data it has never seen before. This section uses the test set to make predictions and calculate various performance metrics that tell us how accurate and reliable our model is.**
+
+## Predicted Probabilities
+
+**Once the model is trained, we used the predict() function to generate predicted probabilities for each borrower in the test set. The model outputs a number between 0 and 1 for every observation. To convert these probabilities into a final class prediction, we applied a threshold of 0.5. If the predicted probability is greater than 0.5, we classify that borrower as a default. If it is 0.5 or below, we classify them as non-default. This threshold is the standard starting point and can be adjusted later depending on business needs.**
+
+```{r}
+probabilities <- predict(model_logit, test_data, type = "response")
+predicted_class <- ifelse(probabilities > 0.5, 1, 0)
+predicted_class <- as.factor(predicted_class)
+```
+
+## Confusion Matrix
+
+**We used the confusionMatrix() function from the caret package to compare our predictions against the actual outcomes. The confusion matrix breaks results into four categories. True Negatives are borrowers we correctly predicted as safe. True Positives are defaults we correctly identified. False Positives are cases where we predicted a default but the borrower was actually safe. False Negatives are the most concerning category for banks because these are actual defaults that our model failed to catch, meaning the bank would have approved a loan that was never repaid.**
+
+```{r}
+cm <- confusionMatrix(predicted_class, test_data$loan_status)
+print(cm)
+```
+
+## Precision, Recall, and F1-Score
+
+**We calculated all performance metrics manually from the confusion matrix values to understand exactly what each one means. Our model achieved an accuracy of 84.39%, meaning it correctly classified about 84 out of every 100 borrowers. Precision came out to 44.89%, which means that when we flag a loan as risky, we are correct about 45% of the time. Recall is 72.55%, meaning we successfully identified about 73% of all borrowers who actually defaulted. The F1-Score of 0.5546 gives us a single balanced measure that combines both precision and recall together.**
+
+```{r}
+tn <- cm$table[1, 1]
+fp <- cm$table[1, 2]
+fn <- cm$table[2, 1]
+tp <- cm$table[2, 2]
+
+precision <- tp / (tp + fp)
+recall <- tp / (tp + fn)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+specificity <- tn / (tn + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+
+cat("=========== CLASSIFICATION METRICS SUMMARY ===========\n\n")
+cat("Accuracy:     ", round(accuracy, 4), "\n")
+cat("Precision:    ", round(precision, 4), "\n")
+cat("Recall:       ", round(recall, 4), "\n")
+cat("Specificity:  ", round(specificity, 4), "\n")
+cat("F1-Score:     ", round(f1_score, 4), "\n\n")
+
+cat("CONFUSION MATRIX BREAKDOWN:\n")
+cat("True Negatives (TN):  ", tn, "\n")
+cat("False Positives (FP): ", fp, "\n")
+cat("False Negatives (FN): ", fn, "\n")
+cat("True Positives (TP):  ", tp, "\n\n")
+
+cat("DETAILED INTERPRETATION:\n")
+cat("PRECISION =", round(precision, 4), "\n")
+cat("When we predict a loan will DEFAULT, we are correct ", 
+    round(precision*100, 2), "% of the time.\n\n")
+
+cat("RECALL =", round(recall, 4), "\n")
+cat("We correctly identify ", round(recall*100, 2), 
+    "% of ALL loans that actually defaulted.\n\n")
+
+cat("F1-SCORE =", round(f1_score, 4), "\n")
+cat("Balanced measure of precision and recall.\n")
+```
+
+## ROC Curve and AUC
+
+**We also plotted the ROC curve and calculated the AUC score. The ROC curve shows how the model performs at every possible threshold value, not just 0.5. A model that randomly guesses would follow the diagonal line with an AUC of 0.5. Our model achieved an AUC of 0.8478, which puts it in the good range and confirms that it has strong ability to separate defaulters from non-defaulters across all thresholds.**
+
+```{r}
+roc_obj <- roc(test_data$loan_status, probabilities)
+
+plot(roc_obj, col = "red", main = "ROC Curve - Logistic Regression",
+     xlab = "False Positive Rate (1 - Specificity)",
+     ylab = "True Positive Rate (Recall/Sensitivity)")
+
+auc_score <- auc(roc_obj)
+cat("\nArea Under the ROC Curve (AUC):", round(auc_score, 4), "\n")
+```
+
+# Interpretation of Results
+
+**After evaluating performance, we examined the model results in detail to draw meaningful conclusions about what drives loan default risk.**
+
+## Model Performance Summary
+
+**-The model achieves an accuracy of `r round(accuracy, 4)` (`r round(accuracy*100, 2)`%), correctly classifying `r round(accuracy*100, 2)`% of all loans.**
+
+**-Precision is `r round(precision, 4)` (`r round(precision*100, 2)`%), meaning when we flag a loan as risky, we are correct `r round(precision*100, 2)`% of the time.**
+
+**-Recall is `r round(recall, 4)` (`r round(recall*100, 2)`%), meaning we catch `r round(recall*100, 2)`% of actual defaults but miss `r round((1-recall)*100, 2)`%.**
+
+**-F1-Score of `r round(f1_score, 4)` provides a balanced view of precision and recall.**
+
+**-AUC of `r round(auc_score, 4)` indicates good discrimination between defaults and non-defaults.**
+
+## Key Risk Factors
+
+**After evaluating performance, we examined the odds ratios to understand which variables drive default risk. We calculated these by exponentiating the model coefficients using exp(coef()). An odds ratio greater than 1 means the variable increases default risk, while less than 1 means it reduces risk.**
+
+```{r}
+odds_ratios <- exp(coef(model_logit))
+
+or_table <- data.frame(
+  Variable = names(odds_ratios),
+  "Odds Ratio" = round(odds_ratios, 4),
+  "Percent Change" = paste(round((odds_ratios - 1) * 100, 2), "%")
+)
+
+print(or_table)
+```
+
+**-Loan Interest Rate (loan_int_rate): Strong positive effect. Each 1% increase significantly increases default odds.**
+
+**-Loan Percent Income (loan_percent_income): Strong positive effect. Higher loan-to-income ratios substantially increase default probability.**
+
+**-Loan Amount (loan_amnt): Negative effect. Larger loans are associated with lower default risk.**
+
+**-Home Ownership (person_home_ownership): Homeowners have substantially lower default risk than renters.**
+
+**-Employment Length (person_emp_length): Longer employment reduces default risk.**
+
+## Precision-Recall Trade-off
+
+**Our precision of 44.89% means that more than half the loans we flag as risky are actually safe borrowers. However, our recall of 72.55% means we successfully caught almost three quarters of all actual defaults. For loan default prediction, catching more defaults is more valuable than minimizing false alarms, since missing a real default costs the bank money they lent out and will never recover.**
+
+# Conclusion
+
+**We successfully built a logistic regression model that predicts loan default with 84.39% accuracy and an AUC of 0.8478. The model provides clear and actionable insights for lending decisions. Interest rate and loan to income ratio came out as the strongest risk increasers. This makes intuitive sense because borrowers with high interest rates and those spending a large portion of their income on loan repayment are under more financial pressure and are more likely to fail to repay. Home ownership and longer employment length both reduce default risk, reflecting that financially stable and long employed borrowers are more reliable.**
+
+**The main limitation is that recall at 72.55% means we still miss about 27% of actual defaults, which is an area for future improvement. We could address this by testing more powerful models like Random Forest or Gradient Boosting, tuning the decision threshold based on business costs, or applying cross-validation for more robust evaluation. The key risk factors we identified can also be used by banks to prescreen loan applications and manage portfolio risk more effectively.**
+
+**Future improvements may include:**
+
+**Testing alternative models (Random Forest, Gradient Boosting) for comparison,**
+
+**Optimizing the decision threshold based on business costs of false positives vs. false negatives,**
+
+**Cross-validation to ensure model stability across different data samples,**
+
+**Feature engineering to capture interactions between variables,**
+
+**Segment-specific models for different loan types or borrower profiles.**
