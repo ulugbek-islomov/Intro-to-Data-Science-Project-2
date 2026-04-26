@@ -1,0 +1,1166 @@
+---
+title: "Project 2: Implementing Regression-Based and Classification Modeling Techniques"
+author: "Ulugbek Islomov, Soumay Patidar, Maurice Goode"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+    code_folding: hide
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE
+)
+
+options(scientific = TRUE, digits = 3)
+
+library(viridis)
+library(dplyr)
+library(scales)
+library(tidyverse)
+library(pROC)
+library(caret)
+library(ggplot2)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(pdp)
+library(gridExtra)
+library(reshape2)
+library(car)
+```
+
+
+**Introduction**
+
+This project analyzes a credit risk dataset containing more than 30,000 loan observations. The dataset includes detailed information on borrower demographics, financial capacity, credit history, and loan characteristics.
+
+Building on exploratory findings from Project 1, this project focuses on applying statistical modeling techniques to better understand and quantify the relationships between borrower characteristics and key lending outcomes.
+
+The primary objective is to apply regression-based, classification, and tree-based modeling approaches to address three SMART research questions that capture different dimensions of credit risk and lending behavior. These questions focus on pricing (interest rate determination), default prediction, and the relationship between loan pricing and realized default risk.
+
+
+The analysis integrates exploratory insights with formal statistical models to evaluate both explanatory relationships and predictive performance, while also assessing the strengths and limitations of the used models. In addition to regression-based approaches, tree-based methods are also applied to capture non-linear relationships and enhance model interpretation.
+
+
+**Background and Summary of Project 1**
+
+In Project 1, we conducted an exploratory data analysis of the same credit risk dataset obtained from Kaggle. The goal was to identify key patterns in borrower behavior, default risk, and revenue generation.
+
+The analysis revealed that income and loan amount distributions are highly right-skewed, and that borrower characteristics such as income, employment length, loan intent, and credit history are strongly associated with both default risk and revenue outcomes. In particular, loan grade and income level were identified as major factors influencing default behavior.
+
+These findings motivate the current project, where we move from exploratory analysis to formal statistical modeling in order to quantify these relationships and assess their significance.
+
+
+**Data and Variables**
+
+**Data Source**
+
+This project uses the *credit_risk_dataset.csv* obtained from Kaggle. It includes 32,581 observations and 12 variables describing borrower attributes and loan outcomes.
+
+```{r}
+credit_risk_dataset_1 = read.csv("credit_risk_dataset.csv")
+nrow(credit_risk_dataset_1)
+ncol(credit_risk_dataset_1)
+```
+
+Variable definitions  
+
+Variable | Definition  
+:-|:--  
+person_age | Age of the borrower  
+person_income | Annual income of the borrower  
+person_home_ownership | Home ownership status  
+person_emp_length | Length of employment (months)  
+loan_intent | Purpose of the loan  
+loan_grade | Credit grade assigned to the loan  
+loan_amnt | Loan amount  
+loan_int_rate | Annual interest rate (%)  
+loan_status | Loan outcome (1 = default, 0 = non-default)  
+loan_percent_income | Loan amount as a percentage of income  
+cb_person_default_on_file | Prior default history (Y/N)  
+cb_person_cred_hist_length | Length of credit history (years)
+
+**Data Cleaning & Feature Engineering**
+
+**Data type corrections**
+
+```{r}
+summary(credit_risk_dataset_1)
+```
+
+The summary output indicates that several categorical variables are incorrectly treated as numeric. These variables are converted to factors to ensure proper handling in statistical modeling:
+ - person_home_ownership
+ - loan_intent
+ - loan_grade
+ - cb_person_default_on_file
+ - loan_status
+
+``` {r}
+credit_risk_dataset_1$person_home_ownership = as.factor(credit_risk_dataset_1$person_home_ownership)
+credit_risk_dataset_1$loan_intent = as.factor(credit_risk_dataset_1$loan_intent)
+credit_risk_dataset_1$loan_grade = as.factor(credit_risk_dataset_1$loan_grade)
+credit_risk_dataset_1$loan_status = as.factor(credit_risk_dataset_1$loan_status)
+credit_risk_dataset_1$cb_person_default_on_file = as.factor(credit_risk_dataset_1$cb_person_default_on_file)
+summary(credit_risk_dataset_1)
+```
+
+**Handling missing values**
+
+Missing values exist in key variables, particularly person_emp_length and loan_int_rate. Since loan_int_rate is a primary variable used in modeling, observations with missing values in these fields cannot be reliably included in the study. Taking into account the relatively large size of the dataset (over 30,000 observations), we adopt a complete-case analysis approach, where rows containing missing values are removed. This approach is appropriate in this context because it simplifies the analysis and is unlikely to significantly reduce statistical power.
+
+```{r}
+colSums(is.na(credit_risk_dataset_1))
+credit_risk_dataset_clean = na.omit(credit_risk_dataset_1)
+colSums(is.na(credit_risk_dataset_clean))
+nrow(credit_risk_dataset_clean)
+```
+
+The dataset is cleaned by removing observations with missing values and new dataframe - "credit_risk_dataset_clean" is created.
+
+Now we have 28,638 clean rows.
+
+The cleaned dataset is used for all subsequent exploratory analysis and modeling steps in this project.
+
+
+
+**Smart question 1: Do Borrower Characteristics Affect Interest Rate?** 
+
+**Modeling Strategy**
+
+This question is primarily an inference problem, as the goal is to determine how borrower characteristics are associated with loan interest rate and whether these relationships are statistically significant.
+
+To address this question, multiple linear regression is used with `loan_int_rate` as the response variable.
+
+Two regression models are considered:
+
+- The first model includes only borrower-related attributes (demographic, financial, and credit history variables).
+- The second model extends the first by including `loan_grade`, which reflects the lender’s internal risk assessment.
+
+Comparing these models helps distinguish between direct borrower effects and the explanatory role of institutional risk classification.
+
+In addition, regression tree models are employed to capture potential non-linear relationships and interaction effects among predictors. Trees provide an interpretable, rule-based representation of how interest rates are determined and allow comparison between models with and without loan grade.
+
+The combined use of regression and tree-based methods provides both statistical inference and structural insight into interest rate determination.
+
+
+**Step 1**
+
+**Correlation matrix for quantitative variables**
+
+We compute a correlation matrix for the quantitative variables to identify which numeric borrower characteristics are most strongly associated with interest rate and to perform variable selection for the regression model.
+
+```{r}
+# Selecting numeric variables (including response)
+num_vars_q1 = credit_risk_dataset_clean[, c(
+  "loan_int_rate",
+  "person_age",
+  "person_income",
+  "person_emp_length",
+  "loan_amnt",
+  "loan_percent_income",
+  "cb_person_cred_hist_length"
+)]
+
+# Computing correlation matrix
+cor_matrix_q1 = cor(num_vars_q1, use = "complete.obs")
+
+cor_matrix_q1
+```
+```{r}
+cor_df_q1 = melt(cor_matrix_q1)
+
+ggplot(cor_df_q1, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(value, 2)), size = 4) +
+  scale_fill_gradient2(low = "steelblue", high = "darkred", mid = "white", midpoint = 0) +
+  labs(
+    title = "Correlation Heatmap for Quantitative Variables",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+**Correlation Matrix Interpretation**
+
+The correlation matrix shows that the linear relationships between borrower characteristics and interest rate are generally weak. The strongest positive associations with interest rate are observed for loan amount (0.1459) and loan percent income (0.1235). Most borrower characteristics, such as age, income, employment length, and credit history length, exhibit near-zero correlation with interest rate.
+
+This suggests that borrower characteristics alone may have limited direct linear association with interest rate, and that additional variables-such as loan grade may play a more important role in explaining variation in interest rates.
+
+
+**Step 2**
+
+**Scatter Plots for Quantitative Variables**
+
+We create scatter plots to visually examine the relationships between interest rate and quantitative borrower characteristics, and to assess whether these relationships appear approximately linear.
+
+```{r}
+pairs(num_vars_q1)
+```
+
+**Scatter Plot Interpretation**
+
+The scatter plots confirm that the relationships between interest rate and the quantitative borrower characteristics are generally weak and do not exhibit strong linear patterns. Most plots show a high degree of dispersion with no clear upward or downward trend.
+
+While loan amount and loan percent income display a slight positive pattern with interest rate, the relationships remain relatively weak. Overall, the visual analysis supports the findings from the correlation matrix, suggesting that borrower characteristics alone have limited explanatory power for interest rate in a linear framework.
+
+
+**Step 3**
+
+**Boxplots for Categorical Borrower Characteristics**
+
+We use boxplots to examine how interest rate varies across categorical borrower characteristics, allowing us to assess whether different groups are associated with different levels of interest rates.
+
+```{r}
+ggplot(credit_risk_dataset_clean, aes(x = person_home_ownership, y = loan_int_rate)) +
+  geom_boxplot()
+
+ggplot(credit_risk_dataset_clean, aes(x = loan_intent, y = loan_int_rate)) +
+  geom_boxplot()
+
+ggplot(credit_risk_dataset_clean, aes(x = cb_person_default_on_file, y = loan_int_rate)) +
+  geom_boxplot()
+```
+
+
+**Boxplot Interpretation**
+
+The boxplots show that interest rates vary across categorical borrower characteristics, although the differences are generally moderate. Home ownership and loan intent exhibit some variation in median interest rates across groups, but the differences are not very pronounced.
+
+In contrast, prior default history (`cb_person_default_on_file`) shows a clear and substantial difference: borrowers with a prior default ("Y") tend to have significantly higher interest rates than those without ("N"). This suggests that default history is an important predictor of interest rate.
+
+
+
+**Step 4**
+
+**Model 1: Borrower Characteristics Only**
+
+We fit a multiple linear regression model using only borrower-related attributes to evaluate their direct association with interest rate.
+
+```{r}
+model1_q1 = lm(
+              loan_int_rate ~ person_age + person_income + person_emp_length + person_home_ownership + loan_intent +
+              cb_person_cred_hist_length + cb_person_default_on_file,data = credit_risk_dataset_clean
+              )
+
+summary(model1_q1)
+```
+
+
+**Model 1 Interpretation**
+
+The results show that several borrower characteristics are statistically significant predictors of interest rate. In particular, prior default history has a very strong positive effect (p-value < 2e-16) , indicating that borrowers with a previous default are charged substantially higher interest rates. Additionally, income, employment length, home ownership status, and credit history length also have significant, though smaller, effects on interest rate.
+
+However, some variables such as age and several loan intent categories are not statistically significant. Overall, the model explains about 26.3% of the variation in interest rates, suggesting that borrower characteristics alone provide moderate explanatory power.
+
+
+**Step 5**
+
+**Model 2: Adding Loan Grade**
+
+We extend Model 1 by including loan grade to examine how risk classification improves the explanation of interest rates.
+
+```{r}
+model2_q1 = lm(
+              loan_int_rate ~ person_age + person_income + person_emp_length + person_home_ownership + loan_intent +
+              cb_person_cred_hist_length + cb_person_default_on_file + loan_grade, data = credit_risk_dataset_clean
+              )
+
+summary(model2_q1)
+```
+
+**Model 2 Interpretation**
+
+After adding loan grade to the model, the explanatory power increases dramatically, with R-squared rising to approximately 90.3%. Loan grade appears as the strongest predictor of interest rate in the model, with higher risk grades (B–G) associated with substantially higher interest rates compared to the reference category.
+
+Importantly, the effect of prior default becomes statistically insignificant after including loan grade, suggesting that this risk information is largely incorporated into the loan grading system. Similarly, several borrower characteristics become weaker or insignificant, indicating that much of their influence is incorporated into the loan grading system.
+
+Overall, this model demonstrates that loan grade is the primary driver of interest rate determination, and borrower characteristics play a secondary role once risk classification is accounted for.
+
+
+**Step 6**
+
+**Multicollinearity Assessment (VIF)**
+
+We implement the Variance Inflation Factor (VIF) to assess the presence of multicollinearity among the predictors in the regression model
+
+```{r}
+vif(model2_q1)
+```
+
+**Multicollinearity Interpretation**
+
+The Variance Inflation Factor (VIF) was computed to assess the presence of multicollinearity among the predictors in the regression model.
+
+The results indicate that all adjusted VIF values (GVIF^(1/(2×Df))) are close to 1, with the largest values observed for person_age (1.99) and cb_person_cred_hist_length (1.96). These values remain well below commonly used thresholds (e.g., 5 or 10), suggesting that multicollinearity is not a serious concern in this model.
+
+Categorical variables with multiple levels, such as loan_grade, were evaluated using the adjusted GVIF measure. The adjusted value for loan_grade is 1.05, indicating that it does not introduce problematic multicollinearity despite being a composite risk measure.
+
+Overall, the results suggest that the predictors are not highly correlated with each other, and the estimated regression coefficients are stable and reliable. Therefore, no corrective action is required, and all variables can be retained in the model.
+
+
+
+**Step 7**
+
+**ANOVA Model Comparison**
+
+We use an ANOVA test to formally compare Model 1 and Model 2 and determine whether adding loan grade significantly improves the model.
+
+
+```{r}
+anova(model1_q1, model2_q1)
+```
+
+**ANOVA Model Comparison Interpretation**
+
+The ANOVA results show that adding loan grade to the model leads to a highly significant improvement in model fit (F = 31485, p < 2e-16). The large reduction in residual sum of squares indicates that loan grade explains a substantial portion of the variation in interest rates.
+
+Therefore, we reject the null hypothesis and conclude that Model 2 provides a significantly better fit than Model 1. This confirms that loan grade adds important explanatory power beyond borrower characteristics alone.
+
+
+**Step 8**
+
+**Model Diagnostics**
+
+We examine residual plots to assess model assumptions such as linearity, normality, and constant variance.
+
+```{r}
+par(mfrow = c(2,2))
+plot(model2_q1)
+```
+
+
+**Model Diagnostics Interpretation**
+
+The Residuals vs Fitted plot shows no strong systematic pattern, suggesting that the linearity assumption is reasonably satisfied. The Scale-Location plot indicates that the spread of residuals is relatively consistent, although there is slight heteroscedasticity at higher fitted values.
+
+The Q-Q plot reveals some deviation from normality in the tails, indicating that the residuals are not perfectly normally distributed. However, given the large sample size, this deviation is not a major concern.
+
+The Residuals vs Leverage plot shows a few observations with higher leverage, but none appear to have an excessively strong influence on the model.
+
+Overall, the diagnostic plots suggest that the model assumptions are reasonably satisfied, and the model provides a reliable fit to the data.
+
+
+**Step 9**
+
+**Visualization of Interest Rate by Loan Grade**
+
+We visualize the relationship between loan grade and interest rate to illustrate how risk classification affects pricing.
+
+```{r}
+ggplot(credit_risk_dataset_clean, aes(x = loan_grade, y = loan_int_rate)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Interest Rate Distribution by Loan Grade",
+    x = "Loan Grade",
+    y = "Interest Rate"
+    ) +
+  theme_minimal()
+```
+
+**Visualization Interpretation**
+
+The boxplot clearly shows that interest rates increase consistently across loan grades from A to G. Higher risk grades are associated with higher median interest rates and wider variability. This visual evidence strongly supports the regression results, confirming that loan grade is the primary determinant of interest rates.
+
+
+**Step 10**
+
+**Interest Rate Prediction Tool**
+
+To demonstrate the practical application of the fitted linear regression model, we construct a simple prediction tool that estimates the expected interest rate for a new borrower based on their characteristics.
+
+```{r}
+# Example new borrower
+new_borrower_q1 = data.frame(
+  person_age = 30,
+  person_income = 45000,
+  person_emp_length = 5,
+  person_home_ownership = factor("RENT", levels = levels(credit_risk_dataset_clean$person_home_ownership)),
+  loan_intent = factor("MEDICAL", levels = levels(credit_risk_dataset_clean$loan_intent)),
+  cb_person_cred_hist_length = 6,
+  cb_person_default_on_file = factor("N", levels = levels(credit_risk_dataset_clean$cb_person_default_on_file)),
+  loan_grade = factor("C", levels = levels(credit_risk_dataset_clean$loan_grade))
+)
+
+# Predicted interest rate
+predicted_rate_q1 = predict(model2_q1, newdata = new_borrower_q1)[1]
+
+# Clean output
+cat("Predicted Interest Rate:", round(predicted_rate_q1, 3), "\n")
+```
+
+**Prediction Tool Interpretation**
+
+The fitted linear regression model can be used as a practical prediction tool for estimating the interest rate assigned to a new borrower. By entering borrower demographic, financial, credit-history, and loan-grade information into the model, we obtain a predicted interest rate based on the relationships learned from the data.
+
+In the illustrative example, the model generates a predicted interest rate for a borrower with specified characteristics. This demonstrates how the regression model can be translated into a decision-support tool for pricing loans in a lending environment.
+
+Although the tool provides a useful estimate, it should be interpreted as a statistical prediction rather than an exact pricing rule, since real-world lending decisions may also incorporate additional institutional, regulatory, and market considerations.
+
+
+**Step 11**
+
+**Regression Tree Models**
+
+** --With Loan Grade**
+
+To complement the linear regression analysis, we implement a regression tree model including loan grade along with borrower characteristics. Unlike linear regression, which assumes a linear relationship between predictors and the response variable, regression trees capture non-linear patterns and interaction effects through a hierarchical structure of decision rules.
+
+Including loan grade in the tree allows us to assess whether the tree-based method confirms the dominant role of risk classification observed in the regression model. In particular, this approach helps determine whether loan grade alone is sufficient to explain most of the variation in interest rates, or whether additional borrower characteristics contribute meaningful information.
+
+By comparing the structure of the regression tree with the results from the linear model, we gain further insight into how interest rates are determined in a rule-based pricing framework.
+
+This result is consistent with the regression findings and suggests that the observed high explanatory power may partly reflect the recovery of an internal pricing rule rather than an entirely independent borrower-level relationship.
+
+
+
+```{r}
+# Fit regression tree
+tree_q1 = rpart(
+  loan_int_rate ~ person_age + person_income + person_emp_length +
+  person_home_ownership + loan_intent +
+  cb_person_cred_hist_length + cb_person_default_on_file + loan_grade,
+  data = credit_risk_dataset_clean,
+  method = "anova"
+)
+
+# Plot tree
+rpart.plot(tree_q1)
+```
+
+
+**Interpretation**
+
+The regression tree demonstrates a highly structured and hierarchical relationship between loan grade and interest rates. The initial and most influential split occurs on loan grade A, indicating that this variable is the primary determinant of interest rate variation. Subsequent splits continue exclusively across loan grade categories (B, C, and D), forming a sequential risk-based structure.
+
+As loan grade deteriorates from A to D, the predicted interest rate increases consistently, with grade A loans exhibiting the lowest average interest rate (approximately 7.3%), and lower grades reaching substantially higher levels (up to approximately 17%).
+
+Importantly, no additional borrower characteristics appear in the tree, indicating that once loan grade is known, other variables do not provide additional explanatory power. This suggests that loan grade functions as a comprehensive summary of borrower risk and directly drives pricing decisions.
+
+Overall, the tree reveals a rule-based pricing mechanism, where interest rates are primarily determined by categorical risk classification rather than individual borrower attributes.
+
+
+** --Without Loan Grade**
+
+
+To better understand the underlying role of borrower characteristics in determining interest rates, we construct a second regression tree that excludes loan grade. Since loan grade represents the lender’s internal risk classification, removing it allows us to examine how interest rates are explained directly by borrower demographic, financial, and credit-related variables.
+
+This approach helps reveal whether fundamental borrower characteristics—such as prior default history, income, and home ownership—can independently explain variation in interest rates when the summary risk measure is not available.
+
+Comparing this tree with the model that includes loan grade provides valuable insight into the extent to which loan grade encapsulates borrower risk and replaces the need for individual predictors in determining loan pricing.
+
+
+
+```{r}
+tree_q1_no_grade = rpart(
+  loan_int_rate ~ person_age + person_income + person_emp_length +
+  person_home_ownership + loan_intent +
+  cb_person_cred_hist_length + cb_person_default_on_file,
+  data = credit_risk_dataset_clean,
+  method = "anova"
+)
+
+rpart.plot(tree_q1_no_grade)
+```
+
+**Interpretation**
+
+The regression tree excluding loan grade reveals a more nuanced and behavior-driven structure of interest rate determination. The first and most important split occurs on prior default status (cb_person_default_on_file), indicating that credit history is the dominant factor influencing interest rates when the grading system is not considered.
+
+Borrowers with a history of default are associated with significantly higher interest rates (approximately 15%), reflecting increased perceived risk. Among borrowers without prior defaults, the next important factor is home ownership status. Individuals who own or have a mortgage tend to receive lower interest rates (approximately 9.9%), while those without stable housing arrangements face higher rates (approximately 11%).
+
+This structure suggests that, in the absence of a formal grading system, lenders rely on key financial stability indicators such as repayment history and asset ownership to assess risk and determine pricing.
+
+Overall, the tree highlights the underlying borrower-level drivers of interest rates and demonstrates how financial institutions may construct risk-based pricing rules from fundamental characteristics when summary risk measures are not used.
+
+
+**Conclusion for smart question 1**
+
+The regression results indicate that borrower attributes such as income, employment length, home ownership, and prior default history have statistically significant effects on interest rates when considered independently. However, their overall explanatory power remains moderate.
+
+The inclusion of loan grade in the extended model led to a substantial improvement in model performance, with the R-squared increasing to over 90%. Loan grade emerged as the dominant predictor of interest rates, indicating that risk classification plays a central role in pricing decisions. The ANOVA results confirmed that this improvement is highly statistically significant, demonstrating that loan grade provides critical explanatory information beyond borrower characteristics alone.
+
+The regression tree analysis provides additional insight into the structure of interest rate determination. When loan grade is included, the tree relies almost exclusively on this variable, producing a clear hierarchical structure in which interest rates increase systematically across risk grades. This suggests that loan grade effectively encapsulates the relevant borrower risk information used in pricing.
+
+In contrast, when loan grade is excluded, the tree reveals the underlying borrower-level drivers of interest rates. Prior default history and home ownership emerge as key determinants, indicating that lenders rely on fundamental indicators of financial stability when a formal grading system is not available.
+
+Together, these findings highlight that interest rate determination operates through a structured, rule-based mechanism in which borrower characteristics influence pricing indirectly through institutional risk classification systems.
+
+It is important to note that loan grade is likely constructed by financial institutions using many of the same borrower characteristics included in the model. Therefore, the high explanatory power observed in the extended model may partly reflect the recovery of the bank’s internal pricing rule rather than a purely independent causal relationship. In this sense, the model may be capturing a constructed risk-based pricing mechanism rather than uncovering only natural relationships between borrower characteristics and interest rates. Additionally, the dataset does not include time-related or macroeconomic variables, which are known to influence interest rates. As a result, the model may not fully capture external market conditions affecting loan pricing.
+
+Overall, the combined use of regression and tree-based methods provides a comprehensive understanding of interest rate determination, balancing interpretability, predictive performance, and economic insight.
+
+
+**Smart question 2: What is the probability of loan default for a borrower using demographic and financial variables?**
+
+**Introduction**
+
+In this project, we aim to answer a practical question that matters a lot in the banking and finance industry: can we predict whether a borrower will default on their loan? To answer this, we built a predictive model using logistic regression. We chose logistic regression because our outcome variable, loan_status, is binary. A borrower either defaults, represented by 1, or does not default, represented by 0. Logistic regression is the standard and most interpretable method for this type of binary classification problem.
+
+Our analysis follows a clear step by step process. We first prepared and cleaned the data, then split it into training and testing sets, built the logistic regression model, made predictions on unseen data, evaluated the model using multiple performance metrics, and finally interpreted the results to understand which borrower characteristics are the biggest drivers of loan default risk.
+
+**Key steps in this analysis:**
+
+1. Prepare and clean the data
+2. Split data into training (70%) and testing (30%) sets
+3. Build a logistic regression model using the training data
+4. Make predictions on the test set
+5. Evaluate model performance using multiple metrics:
+
+- Accuracy: Overall percentage of correct predictions
+- Confusion Matrix: Breakdown of correct and incorrect predictions
+- Precision: Of predictions we made, how many were correct?
+- Recall: Of actual defaults, how many did we catch?
+- F1-Score: Balanced measure of precision and recall
+- ROC Curve and AUC: Model's ability to discriminate between defaults and non-defaults
+
+**Interpreting coefficients to identify which borrower characteristics drive default risk**
+
+**Data Preparation**
+
+Before building any model, we need to make sure the data is clean and in the right format. We started by loading the dataset called credit_risk_dataset.csv and examining its structure using the str() and head() functions. This helped us understand how many variables and rows we are working with and what data types each column has. We also used colSums(is.na()) to check how many missing values exist in each column.
+
+```{r}
+credit_data <- read.csv("credit_risk_dataset.csv")
+str(credit_data)
+head(credit_data)
+colSums(is.na(credit_data))
+```
+
+**Convert Target Variable to Factor**
+
+The variable loan_status is our target variable. It tells us whether a loan defaulted or not. We converted it to a factor because R's logistic regression function requires the outcome to be categorical. Without this conversion, R would treat loan_status as a continuous number and try to fit a linear model instead of a classification model, which would give us completely wrong results.
+
+```{r}
+credit_data$loan_status <- as.factor(credit_data$loan_status)
+```
+
+**Converting Categorical Variables to Factors**
+
+Several other variables in the dataset are also categorical in nature. Variables like home ownership type, loan intent, loan grade, and prior default history on file are not numbers but rather categories or labels. We converted all of these to factors as well. This is important because if we leave them as plain text or character strings, R will either ignore them or process them incorrectly during model training.
+
+```{r}
+credit_data$person_home_ownership <- as.factor(credit_data$person_home_ownership)
+credit_data$loan_intent <- as.factor(credit_data$loan_intent)
+credit_data$loan_grade <- as.factor(credit_data$loan_grade)
+credit_data$cb_person_default_on_file <- as.factor(credit_data$cb_person_default_on_file)
+```
+
+**Removing Missing Values**
+
+We used the na.omit() function to remove all rows that contain any missing values. Missing values can cause errors during model training and can also introduce bias in our results. Since the number of missing rows in this dataset is relatively small compared to the total size of around 32,000 observations, removing them is a safe and straightforward approach that does not significantly affect our analysis.
+
+```{r}
+credit_data <- na.omit(credit_data)
+```
+
+**Train-Test Split (70/30)**
+
+We divided the cleaned dataset into two parts. We used 70% of the data to train the model and the remaining 30% to test it. The training set is what the model learns from, and the test set is used to evaluate how well the model performs on data it has never seen before. This separation is critical because if we evaluated the model on the same data it trained on, we would get overly optimistic results that do not reflect real world performance.
+
+We used set.seed(123) to make the split reproducible, meaning every time we run the code we get the exact same split. We also used createDataPartition which ensures that both the training and testing sets have a similar proportion of defaults and non-defaults, so neither set is imbalanced.
+
+```{r}
+set.seed(123)
+train_index <- createDataPartition(credit_data$loan_status, p = 0.7, list = FALSE)
+train_data <- credit_data[train_index, ]
+test_data  <- credit_data[-train_index, ]
+dim(train_data)
+dim(test_data)
+```
+
+**Logistic Regression Model**
+
+We built the logistic regression model using the glm() function with the family parameter set to binomial. This tells R that we are dealing with a binary outcome and that it should use the logistic function to estimate probabilities. The model was trained on the 70% training data.
+
+We included 8 predictor variables in the model: person_income, person_emp_length, person_home_ownership, loan_amnt, loan_int_rate, loan_percent_income, person_age, and cb_person_cred_hist_length. These variables represent a mix of the borrower's personal financial situation and the specific loan characteristics. After training, we used summary() to examine which variables are statistically significant and in which direction they influence the probability of default.
+
+```{r}
+model_logit <- glm(loan_status ~ person_income + person_emp_length +
+                                 person_home_ownership +loan_amnt +
+                                 loan_int_rate +loan_percent_income +
+                                 person_age +cb_person_cred_hist_length,
+                   data = train_data, family = binomial)
+
+summary(model_logit)
+```
+
+**Model Evaluation**
+
+After building the model, we evaluated how well it performs on data it has never seen before. This section uses the test set to make predictions and calculate various performance metrics that tell us how accurate and reliable our model is.
+
+**Predicted Probabilities**
+
+Once the model is trained, we used the predict() function to generate predicted probabilities for each borrower in the test set. The model outputs a number between 0 and 1 for every observation. To convert these probabilities into a final class prediction, we applied a threshold of 0.5. If the predicted probability is greater than 0.5, we classify that borrower as a default. If it is 0.5 or below, we classify them as non-default. This threshold is the standard starting point and can be adjusted later depending on business needs.
+
+```{r}
+probabilities <- predict(model_logit, test_data, type = "response")
+predicted_class <- ifelse(probabilities > 0.5, 1, 0)
+predicted_class <- as.factor(predicted_class)
+```
+
+**Confusion Matrix**
+
+We used the confusionMatrix() function from the caret package to compare our predictions against the actual outcomes. The confusion matrix breaks results into four categories. True Negatives are borrowers we correctly predicted as safe. True Positives are defaults we correctly identified. False Positives are cases where we predicted a default but the borrower was actually safe. False Negatives are the most concerning category for banks because these are actual defaults that our model failed to catch, meaning the bank would have approved a loan that was never repaid.
+
+```{r}
+cm <- confusionMatrix(predicted_class, test_data$loan_status)
+print(cm)
+```
+
+**Precision, Recall, and F1-Score**
+
+We calculated all performance metrics manually from the confusion matrix values to understand exactly what each one means. Our model achieved an accuracy of 84.39%, meaning it correctly classified about 84 out of every 100 borrowers. Precision came out to 44.89%, which means that when we flag a loan as risky, we are correct about 45% of the time. Recall is 72.55%, meaning we successfully identified about 73% of all borrowers who actually defaulted. The F1-Score of 0.5546 gives us a single balanced measure that combines both precision and recall together.
+
+```{r}
+tn <- cm$table[1, 1]
+fp <- cm$table[1, 2]
+fn <- cm$table[2, 1]
+tp <- cm$table[2, 2]
+
+precision <- tp / (tp + fp)
+recall <- tp / (tp + fn)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+specificity <- tn / (tn + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+
+cat("=========== CLASSIFICATION METRICS SUMMARY ===========\n\n")
+cat("Accuracy:     ", round(accuracy, 4), "\n")
+cat("Precision:    ", round(precision, 4), "\n")
+cat("Recall:       ", round(recall, 4), "\n")
+cat("Specificity:  ", round(specificity, 4), "\n")
+cat("F1-Score:     ", round(f1_score, 4), "\n\n")
+
+cat("CONFUSION MATRIX BREAKDOWN:\n")
+cat("True Negatives (TN):  ", tn, "\n")
+cat("False Positives (FP): ", fp, "\n")
+cat("False Negatives (FN): ", fn, "\n")
+cat("True Positives (TP):  ", tp, "\n\n")
+
+cat("DETAILED INTERPRETATION:\n")
+cat("PRECISION =", round(precision, 4), "\n")
+cat("When we predict a loan will DEFAULT, we are correct ", 
+    round(precision*100, 2), "% of the time.\n\n")
+
+cat("RECALL =", round(recall, 4), "\n")
+cat("We correctly identify ", round(recall*100, 2), 
+    "% of ALL loans that actually defaulted.\n\n")
+
+cat("F1-SCORE =", round(f1_score, 4), "\n")
+cat("Balanced measure of precision and recall.\n")
+```
+
+**ROC Curve and AUC**
+
+We also plotted the ROC curve and calculated the AUC score. The ROC curve shows how the model performs at every possible threshold value, not just 0.5. A model that randomly guesses would follow the diagonal line with an AUC of 0.5. Our model achieved an AUC of 0.8478, which puts it in the good range and confirms that it has strong ability to separate defaulters from non-defaulters across all thresholds.
+
+```{r}
+roc_obj <- roc(test_data$loan_status, probabilities)
+
+plot(roc_obj, col = "red", main = "ROC Curve - Logistic Regression",
+     xlab = "False Positive Rate (1 - Specificity)",
+     ylab = "True Positive Rate (Recall/Sensitivity)")
+
+auc_score <- auc(roc_obj)
+cat("\nArea Under the ROC Curve (AUC):", round(auc_score, 4), "\n")
+```
+
+**Interpretation of Results**
+
+After evaluating performance, we examined the model results in detail to draw meaningful conclusions about what drives loan default risk.
+
+**Model Performance Summary**
+
+-The model achieves an accuracy of `r round(accuracy, 4)` (`r round(accuracy*100, 2)`%), correctly classifying `r round(accuracy*100, 2)`% of all loans.
+
+-Precision is `r round(precision, 4)` (`r round(precision*100, 2)`%), meaning when we flag a loan as risky, we are correct `r round(precision*100, 2)`% of the time.
+
+-Recall is `r round(recall, 4)` (`r round(recall*100, 2)`%), meaning we catch `r round(recall*100, 2)`% of actual defaults but miss `r round((1-recall)*100, 2)`%.
+
+-F1-Score of `r round(f1_score, 4)` provides a balanced view of precision and recall.
+
+-AUC of `r round(auc_score, 4)` indicates good discrimination between defaults and non-defaults.
+
+**Key Risk Factors**
+
+After evaluating performance, we examined the odds ratios to understand which variables drive default risk. We calculated these by exponentiating the model coefficients using exp(coef()). An odds ratio greater than 1 means the variable increases default risk, while less than 1 means it reduces risk.
+
+```{r}
+odds_ratios <- exp(coef(model_logit))
+
+or_table <- data.frame(
+  Variable = names(odds_ratios),
+  "Odds Ratio" = round(odds_ratios, 4),
+  "Percent Change" = paste(round((odds_ratios - 1) * 100, 2), "%")
+)
+
+print(or_table)
+```
+
+- Loan Interest Rate (loan_int_rate): Strong positive effect. Each 1% increase significantly increases default odds.
+
+- Loan Percent Income (loan_percent_income): Strong positive effect. Higher loan-to-income ratios substantially increase default probability.
+
+- Loan Amount (loan_amnt): Negative effect. Larger loans are associated with lower default risk.
+
+- Home Ownership (person_home_ownership): Homeowners have substantially lower default risk than renters.
+
+- Employment Length (person_emp_length): Longer employment reduces default risk.
+
+**Precision-Recall Trade-off**
+
+Our precision of 44.89% means that more than half the loans we flag as risky are actually safe borrowers. However, our recall of 72.55% means we successfully caught almost three quarters of all actual defaults. For loan default prediction, catching more defaults is more valuable than minimizing false alarms, since missing a real default costs the bank money they lent out and will never recover.
+
+**Conclusion for smart question 2**
+
+We successfully built a logistic regression model that predicts loan default with 84.39% accuracy and an AUC of 0.8478. The model provides clear and actionable insights for lending decisions. Interest rate and loan to income ratio came out as the strongest risk increasers. This makes intuitive sense because borrowers with high interest rates and those spending a large portion of their income on loan repayment are under more financial pressure and are more likely to fail to repay. Home ownership and longer employment length both reduce default risk, reflecting that financially stable and long employed borrowers are more reliable.
+
+The main limitation is that recall at 72.55% means we still miss about 27% of actual defaults, which is an area for future improvement. We could address this by testing more powerful models like Random Forest or Gradient Boosting, tuning the decision threshold based on business costs, or applying cross-validation for more robust evaluation. The key risk factors we identified can also be used by banks to prescreen loan applications and manage portfolio risk more effectively.
+
+**Future improvements may include:**
+
+- Testing alternative models (Random Forest, Gradient Boosting) for comparison
+
+- Optimizing the decision threshold based on business costs of false positives vs. false negatives
+
+- Cross-validation to ensure model stability across different data samples
+
+- Feature engineering to capture interactions between variables
+
+- Segment-specific models for different loan types or borrower profiles
+
+
+**Smart question 3: Does interest rate influence the probability of loan default, even after controlling for borrower and loan characteristics?**
+
+**Step 1: Data Preparation**
+
+```{r}
+# Load & Prepare Data
+df <- read.csv("credit_risk_dataset.csv")
+
+# Convert categorical variables to factors
+df$person_home_ownership      <- as.factor(df$person_home_ownership)
+df$loan_intent                <- as.factor(df$loan_intent)
+df$loan_grade                 <- as.factor(df$loan_grade)
+df$cb_person_default_on_file  <- as.factor(df$cb_person_default_on_file)
+df$loan_status                <- as.factor(df$loan_status)   # 0=non-default, 1=default
+
+df <- na.omit(df)
+
+cat("Rows after NA removal:", nrow(df), "\n")   # expect ~28,638
+
+# Check class balance
+table(df$loan_status)
+prop.table(table(df$loan_status))
+
+# Quick look at interest rate vs default
+ggplot(df, aes(x = loan_status, y = loan_int_rate, fill = loan_status)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("#3B8BD4", "#D85A30"),
+                    labels = c("Non-default", "Default")) +
+  labs(
+    title = "Loan Interest Rate by Default Status",
+    subtitle = "Visual check: does interest rate differ between groups?",
+    x = "Loan Status (0 = Non-default, 1 = Default)",
+    y = "Interest Rate (%)",
+    fill = "Status"
+  ) +
+  theme_minimal()
+```
+
+A quick EDA was performed to convert the appropriate fields to be factors. Next, we removed rows that were missing values. After that we checked the overall count of non-default borrowers vs. default borrowers. An extraordinary number of 78% are non-default borrowers. This is an imbalance that could skew the training data later in our analysis. A boxplot was produced to examine the initial interest rates based on default status. As expected, non-default borrowers had a lower median interest rate vs. default borrowers.
+
+**Step 2: Train/Test Split (80/20)**
+```{r}
+
+# (Class 12: randomly assign observations — do not take first x%)
+set.seed(42)   # Reproducibility
+
+n         <- nrow(df)
+train_idx <- sample(1:n, size = floor(0.80 * n), replace = FALSE)
+
+train <- df[ train_idx, ]
+test  <- df[-train_idx, ]
+
+cat("Training rows:", nrow(train), "\n")
+cat("Test rows    :", nrow(test),  "\n")
+cat("Default rate (train):", round(mean(train$loan_status == 1), 3), "\n")
+cat("Default rate (test) :", round(mean(test$loan_status  == 1), 3), "\n")
+```
+
+For our training and test sets we used the standard 80/20 split. To verify the split is representative, we compared the default rate in the training set (21.6%) to the test set (22.1%) 
+
+**Step 3: Model 1- Logistic Regression (MLR with logit link)**
+
+```{r}
+# MODEL 1: LOGISTIC REGRESSION
+# Dependent variable: loan_status (binary)
+# Key predictor of interest: loan_int_rate
+# Controls: borrower & loan characteristics
+
+logit_model <- glm(
+  loan_status ~ loan_int_rate +         # Key predictor of interest
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data   = train,
+  family = binomial(link = "logit")     # logit link for binary outcome
+)
+
+# Full summary: coefficients, p-values, AIC
+summary(logit_model)
+
+# Coefficient Interpretation
+# Extract odds ratios for easier interpretation
+odds_ratios <- exp(coef(logit_model))
+ci          <- exp(confint(logit_model))
+logit_results <- data.frame(
+  OddsRatio = round(odds_ratios, 4),
+  CI_Lower  = round(ci[, 1], 4),
+  CI_Upper  = round(ci[, 2], 4)
+)
+print(logit_results)
+
+cat("\n--- Key Interpretation for loan_int_rate ---\n")
+cat(sprintf(
+  "Odds Ratio = %.4f: A 1%% increase in interest rate multiplies the\n  odds of default by %.4f, holding all else constant.\n",
+  odds_ratios["loan_int_rate"], odds_ratios["loan_int_rate"]
+))
+
+# McFadden R²
+null_model   <- glm(loan_status ~ 1, data = train, family = binomial)
+mcfadden_r2  <- 1 - (logLik(logit_model) / logLik(null_model))
+cat(sprintf("\nMcFadden R² = %.4f\n", mcfadden_r2))
+
+# Predictions on Test Set
+logit_probs  <- predict(logit_model, newdata = test, type = "response")
+logit_preds  <- ifelse(logit_probs >= 0.5, 1, 0)
+logit_preds  <- as.factor(logit_preds)
+
+# Confusion Matrix
+cm_logit <- confusionMatrix(logit_preds, test$loan_status, positive = "1")
+print(cm_logit)
+
+# ROC-AUC
+roc_logit <- roc(response  = as.numeric(test$loan_status) - 1,
+                 predictor = logit_probs)
+plot(roc_logit,
+     main = "ROC Curve — Logistic Regression",
+     col  = "#3B8BD4",
+     lwd  = 2)
+cat(sprintf("\nLogistic Regression AUC = %.4f\n", auc(roc_logit)))
+```
+
+To adequately answer this SMART Question, we used three models to analyze the data thoroughly We chose a logistic regression, a decision tree, and a random forest. Most of the columns were chosen as key predictors. Some variables that were not statistically significant are `age`, `income`, `cb_person_default_on_file`, and `cb_person_cred_hist_length.` Their p-values were above 0.5 Then we looked at the odds ratio. Variables with an odds ratio above 2 are: `person_home_ownershipRENT`, `loan_grade_D`, `loan_grade_E`, `loan_grade_F`, `loan_grade_G`, and `loan_percent_income`. None of the variables had a negative odds ratio.
+
+In general, below average loan grades and the debt-to-income ratio are key factors for loan underwriting. What stood out to us though was how high the odds ratio was for `loan_grade_G` and `loan_percent_income.` An odds ratio above 1 indicates increased risk. For example, borrowers in higher risk loan grades and with higher loan_percent_income have substantially higher odds of default, though these should be interpreted as multiplicative effects on odds rather than direct probabilities.
+
+Regarding the interest rate, a 1% increase multiplies the odds of default by 1.0881, holding all else constant. The training data explains 36.3% of the variability in the model due to its McFadden R² value. The relationship is statistically significant at any conventional threshold.
+
+Switching gears to the Confusion Matrix. This logistic model has a moderate sensitivity of 54% but a high specificity of 95%. Translating to a balance of actual values and false values from a sensitivity side. On the other hand, the model is highly specific which is not a great sign. Finally, the AUC had a score of 85.93% which is good. However, one caveat that we noticed during EDA is that 78% of the borrowers are non-default. Additionally, methodologies will be needed to draw a more concise conclusion. 
+
+**Step 4: Model 2- Decision Tree (Single, Pruned)**
+
+```{r}
+# MODEL 2: CLASSIFICATION DECISION TREE
+# Fit a full tree first
+tree_full <- rpart(
+  loan_status ~ loan_int_rate +
+    person_age +
+    person_income +
+    person_home_ownership +
+    person_emp_length +
+    loan_amnt +
+    loan_intent +
+    loan_grade +
+    loan_percent_income +
+    cb_person_default_on_file +
+    cb_person_cred_hist_length,
+  data   = train,
+  method = "class",                # classification tree
+  control = rpart.control(cp = 0)  # start unpruned
+)
+
+# Cross-Validation to select optimal cp (alpha)
+printcp(tree_full)    # Table of cp vs. cross-validated error
+plotcp(tree_full)     # Visual: pick cp at the elbow/minimum
+
+# Select the cp that minimizes cross-validated error
+best_cp <- tree_full$cptable[which.min(tree_full$cptable[, "xerror"]), "CP"]
+cat(sprintf("\nOptimal cp (alpha) = %.6f\n", best_cp))
+
+# Prune the tree
+tree_pruned <- prune(tree_full, cp = best_cp)
+
+# Visualize the Pruned Tree
+rpart.plot(
+  tree_pruned,
+  type   = 4,
+  extra  = 104,
+  fallen.leaves = TRUE,
+  main   = "Pruned Classification Tree — Loan Default"
+)
+
+# We isolate the branch starting at Node 2
+tree_node_2 <- snip.rpart(tree_pruned, toss = 2)
+
+# Now we plot the isolated branch
+rpart.plot(
+  tree_node_2,
+  type  = 4,
+  extra = 104,
+  tweak = 1.0, 
+  main  = "Zoomed View: Branch 2 Context"
+)
+
+# Variable Importance
+var_imp_tree <- tree_pruned$variable.importance
+sort(var_imp_tree, decreasing = TRUE)
+
+
+# Bar plot of variable importance
+par(mar = c(12, 4, 4, 2))
+
+barplot(
+  sort(var_imp_tree, decreasing = TRUE),
+  las  = 2,
+  #cex.names = 0.6,
+  col  = "#1D9E75",
+  main = "Variable Importance — Decision Tree",
+  ylab = "Importance"
+)
+
+# Predictions on Test Set
+tree_probs <- predict(tree_pruned, newdata = test, type = "prob")[, 2]
+tree_preds <- predict(tree_pruned, newdata = test, type = "class")
+
+# Confusion Matrix
+cm_tree <- confusionMatrix(tree_preds, test$loan_status, positive = "1")
+print(cm_tree)
+
+# ROC-AUC
+roc_tree <- roc(response  = as.numeric(test$loan_status) - 1,
+                predictor = tree_probs)
+plot(roc_tree,
+     main = "ROC Curve — Decision Tree",
+     col  = "#1D9E75",
+     lwd  = 2)
+cat(sprintf("\nDecision Tree AUC = %.4f\n", auc(roc_tree)))
+```
+Next, we transitioned to non-parametric models because they do not assume the shape of the relationship between the variables and can provide accurate readings when there is a large sample size. We chose a decision tree followed by a random forest. Again, we wanted to test the variable importance of loan_int_rate. In the bar chart, we see that it is the fourth most important variable. More important variables are expected because they align with standard underwriting practices. When applying for a loan the bank evaluates a person's credit history, income, debt-to-income ratio, etc. 
+
+The complexity of this tree was 0.000540 optimal complexity parameter. It was hard to visually read the tree. Instead, we zoomed in on one branch to get a closer look. Nothing of much importance can be derived from that branch. In the Confusion Matrix, the model's accuracy of 93.16% is higher than the 86.24% from the logistic regression. Although the decision tree does have a specificity of 99.55%. That is almost perfect, which could be because it is a single decision tree. Let's multiply it by creating a random forest.
+
+
+**Step 5: Model 3 - Random Forest**
+
+```{r rf_train, cache=FALSE}
+# Building the Random Forest based on the full predictor set 
+# Building the Random Forest using the 'train' dataset
+set.seed(42)
+rf_model <- randomForest(loan_status ~ ., 
+                         data = train, 
+                         ntree = 100, 
+                         importance = TRUE)
+
+# Visualizing which variables drive the model most
+varImpPlot(rf_model, main = "Random Forest Variable Importance")
+
+# Partial Dependence Plot (PDP) Analysis
+
+# Univariate PDP — loan_int_rate only
+set.seed(42)
+pdp_int_rate <- partial(
+  rf_model,
+  pred.var  = "loan_int_rate",   # variable to profile
+  prob      = TRUE,              # return class probabilities
+  which.class = 2,               # class "1" = default
+  train     = train,             # data used to fit the model
+  grid.resolution = 50,          # number of grid points
+  progress  = "text"             # show progress bar
+)
+
+# Inspect the raw PDP values
+head(pdp_int_rate)
+
+# Plot 1: Univariate PDP
+p1 <- ggplot(pdp_int_rate, aes(x = loan_int_rate, y = yhat)) +
+  geom_line(color = "#009E73", linewidth = 1.2) +
+  geom_rug(
+    data  = train,
+    aes(x = loan_int_rate),
+    inherit.aes = FALSE,
+    alpha = 0.05,
+    sides = "b"     
+  ) +
+  labs(
+    title    = "Partial Dependence Plot — loan_int_rate",
+    subtitle = "Marginal effect on P(Default) after averaging over all other predictors",
+    x        = "Loan Interest Rate (%)",
+    y        = "Predicted P(Default)",
+    caption  = "Rug marks show the observed distribution of interest rates in the training set."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    plot.caption  = element_text(color = "grey50", size = 9)
+  )
+
+print(p1)
+
+# Interaction PDP — loan_int_rate × loan_grade
+set.seed(42)
+pdp_int_grade <- partial(
+  rf_model,
+  pred.var    = c("loan_int_rate", "loan_grade"),
+  prob        = TRUE,
+  which.class = 2,
+  train       = train,
+  grid.resolution = 30,
+  progress    = "text"
+)
+
+# Plot 2: Interaction PDP faceted by loan_grade
+p2 <- ggplot(pdp_int_grade,
+             aes(x = loan_int_rate, y = yhat, color = loan_grade)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ loan_grade, nrow = 2) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title    = "Partial Dependence: loan_int_rate × loan_grade",
+    subtitle = "Does interest rate retain a gradient WITHIN each grade?",
+    x        = "Loan Interest Rate (%)",
+    y        = "Predicted P(Default)",
+    color    = "Loan Grade"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    strip.text    = element_text(face = "bold"),
+    legend.position = "none"   # grade already shown as facet label
+  )
+
+print(p2)
+
+
+# Correlation Check — interest rate vs. grade
+train_check <- train %>%
+  mutate(grade_num = as.numeric(loan_grade))   # A=1, B=2, … G=7
+
+spearman_rho <- cor(
+  train_check$loan_int_rate,
+  train_check$grade_num,
+  method = "spearman"
+)
+
+cat(sprintf(
+  "\nSpearman correlation (loan_int_rate vs. loan_grade rank): rho = %.4f\n",
+  spearman_rho
+))
+
+# Boxplot to visualize the overlap
+p3 <- ggplot(train, aes(x = loan_grade, y = loan_int_rate, fill = loan_grade)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+  scale_fill_brewer(palette = "RdYlGn", direction = -1) +
+  labs(
+    title    = "Interest Rate Distribution by Loan Grade",
+    subtitle = "High overlap across grades = evidence of multicollinearity",
+    x        = "Loan Grade",
+    y        = "Interest Rate (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title  = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+print(p3)
+
+# Generating probability predictions on the 'test' dataset
+rf_probs <- predict(rf_model, test, type = "prob")[,2]
+rf_preds <- ifelse(rf_probs > 0.5, 1, 0)
+
+# Confusion Matrix for Random Forest
+cm_rf <- confusionMatrix(as.factor(rf_preds), as.factor(test$loan_status), positive = "1")
+print(cm_rf)
+```
+
+Using a random forest we can get a clearer analysis. Initially we chose 500 trees but required an extreme amount of compute power. So we shrunk it down to 100. The variable importance was our focus with this model. A dot plot was created to measure the variable's Mean Decrease Accuracy (MDA) and Mean Decrease Gini (MDG). Interestingly, the loan_int_rate had a low MDA but a high MDG. This is a rarity. This means that loan_int_rate when removed from the model does not decrease the model's ability to get the outcome. Despite that, it does has node purity and is a decent choice when making a classification for a tree. 
+
+This could mean that it might have a relationship with one or more variables. We tested its partial dependency. Two plots were generated. The first one shows that loan_int_rate does have a statistical significance on loan_default. Nonetheless, when cross-referencing it with loan grade that is where we found a relationship. As the loan grade decreased from grade A to G, then shape of the plot became flatter. Meaning the effect of loan_int_rate had less of an impact as the loan grade got worse. This makes sense because the Spearman correlation between these variables is 94.73%.
+
+
+**Step 6 - Model Comparison & Answer to SMART Question**
+
+```{r}
+# ROC CURVE COMPARISON
+
+# 1. Get probabilities for existing models on the test set
+# (Assuming logit_model and pruned_tree were also trained on 'train')
+logit_probs <- predict(logit_model, test, type = "response")
+tree_probs  <- predict(tree_pruned, test, type = "prob")[,2]
+
+# 2. Calculate ROC objects
+roc_logit <- roc(test$loan_status, logit_probs)
+roc_tree  <- roc(test$loan_status, tree_probs)
+roc_rf    <- roc(test$loan_status, rf_probs)
+
+# 3. Plot the combined ROC Curve
+plot(roc_logit, col = "blue", main = "ROC Curve Comparison for Loan Default", lwd = 2)
+plot(roc_tree, add = TRUE, col = "orange", lwd = 2)
+plot(roc_rf, add = TRUE, col = "#009E73", lwd = 2)
+
+# Add Legend
+legend("bottomright", 
+       legend = c(paste("Logistic Regression (AUC =", round(auc(roc_logit), 3), ")"),
+                  paste("Pruned Decision Tree (AUC =", round(auc(roc_tree), 3), ")"),
+                  paste("Random Forest (AUC =", round(auc(roc_rf), 3), ")")),
+       col = c("blue", "orange", "#009E73"), 
+       lwd = 2)
+
+# FINAL PERFORMANCE SUMMARY
+comparison_metrics <- data.frame(
+  Model = c("Logistic Regression", "Pruned Tree", "Random Forest"),
+  AUC = c(auc(roc_logit), auc(roc_tree), auc(roc_rf)),
+  Accuracy = c(cm_logit$overall["Accuracy"], 
+               cm_tree$overall["Accuracy"], 
+               cm_rf$overall["Accuracy"])
+)
+print(comparison_metrics)
+```
+
+**Conclusion for smart question 3**
+
+In conclusion, the model's accuracy and AUC increased as we built each one. We can conclude that yes interest rate has an influence on loan default. One caveat is that it has a relationship with other variables like loan grade. Another note is that the data is unbalanced with 78% of borrowers being non-default. This could explain why the specificity for the decision tree and random forest were 99%.
+
+Next time we should balance out the data more to see if that would produce a different outcome. Maybe then the correlation between loan grade and interest rate would disappear.
+
+
+**Final overall conclusion**
+
+**Overall, the three SMART questions show that loan pricing and default risk are strongly connected through borrower financial characteristics, loan structure, and institutional risk classification. Loan grade is the strongest driver of interest rates, while default risk is mainly influenced by interest rate, loan-to-income burden, home ownership, employment stability, and credit-related indicators. The classification models show that borrower default can be predicted with reasonably strong performance, although class imbalance remains an important limitation. Taken together, the results suggest that effective credit-risk management should combine statistical modeling, risk grading, and careful threshold selection to support better lending decisions.**
+
+
+
+
+
+
